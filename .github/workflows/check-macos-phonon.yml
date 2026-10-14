@@ -39,10 +39,6 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "15.0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
-      HEX_APPLICATION_SUPPORT_DIR: ${{ runner.temp }}/hex-support
-      HEX_PHONON_FIXTURES: ${{ runner.temp }}/phonon-fixtures
-      HEX_PHONON_BUNDLE: ${{ runner.temp }}/hex-support/models/phonon-2-coreml-1143812f
-      RESULTS: ${{ runner.temp }}/results
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -51,6 +47,13 @@ jobs:
           cache-on-failure: true
       - name: Environment
         run: |
+          {
+            echo "HEX_APPLICATION_SUPPORT_DIR=$RUNNER_TEMP/hex-support"
+            echo "HEX_PHONON_FIXTURES=$RUNNER_TEMP/phonon-fixtures"
+            echo "HEX_PHONON_BUNDLE=$RUNNER_TEMP/hex-support/models/phonon-2-coreml-1143812f"
+            echo "RESULTS=$RUNNER_TEMP/results"
+          } >> "$GITHUB_ENV"
+          RESULTS=$RUNNER_TEMP/results
           mkdir -p "$RESULTS"
           { sw_vers; uname -m; sysctl -n machdep.cpu.brand_string; sysctl -n hw.memsize;
             xcodebuild -version; swift --version; rustc --version; } | tee "$RESULTS/environment.txt"
@@ -94,9 +97,8 @@ jobs:
       - name: Benchmark the default model on the same fixtures
         if: always()
         continue-on-error: true
-        env:
-          HEX_APPLICATION_SUPPORT_DIR: ${{ runner.temp }}/hex-default
         run: |
+          export HEX_APPLICATION_SUPPORT_DIR="$RUNNER_TEMP/hex-default"
           target/release/voice-control install-transcription-model parakeet_unified_en
           target/release/voice-control benchmark-transcription "$HEX_PHONON_FIXTURES/manifest.json" \
             --backend selection --model-id parakeet_unified_en --warmups 1 --runs 5 \
