@@ -116,7 +116,7 @@ impl LinuxTranscriber {
         let architecture = model.arch();
         let capabilities = model.capabilities();
         let language = crate::gguf_session::validate_gguf_artifact(
-            path,
+            &path,
             definition,
             &architecture,
             &variant,

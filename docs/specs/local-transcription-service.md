@@ -173,7 +173,8 @@ export type ModelId =
   | "qwen3_asr06_b"
   | "sense_voice_small"
   | "cohere_transcribe"
-  | "apple_speech";
+  | "apple_speech"
+  | "phonon_2_coreml_en";
 
 export interface ModelInfo {
   id: ModelId;
@@ -194,7 +195,9 @@ export type ModelProgress =
 
 `ModelId` is the SDK's closed set of identifiers, not an availability guarantee.
 The native catalog currently excludes `apple_speech`, and preparation and
-transcription reject it. The retained Apple Speech implementation and
+transcription reject it. `phonon_2_coreml_en` is listed only by Apple silicon
+Macs; it is a pinned multi-file Core ML bundle that preparation downloads,
+verifies, compiles and prewarms like a GGUF model. The retained Apple Speech implementation and
 system-managed metadata do not make it a supported service model.
 
 For the available GGUF models, preparation means download if needed, checksum

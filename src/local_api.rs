@@ -588,7 +588,8 @@ fn transcription_action(
     };
     let model = crate::transcription_models::definition(selection.model);
     let prepared = match model.runtime {
-        crate::transcription_models::ModelRuntime::Gguf(_) => {
+        crate::transcription_models::ModelRuntime::Gguf(_)
+        | crate::transcription_models::ModelRuntime::PhononCoreMl(_) => {
             crate::transcription_models::is_verified(model)
         }
         crate::transcription_models::ModelRuntime::AppleSpeech => {
@@ -1286,10 +1287,7 @@ fn stream_model_prepare(
     transcription: crate::transcription_service::TranscriptionServiceHandle,
 ) {
     let preparer: ModelPreparer = Box::new(move |canceled, downloaded, stage| {
-        if matches!(
-            model.runtime,
-            crate::transcription_models::ModelRuntime::Gguf(_)
-        ) {
+        if model.downloadable() {
             crate::transcription_models::download_with_stage_progress(
                 model,
                 &canceled,

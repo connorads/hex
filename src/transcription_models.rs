@@ -12,6 +12,8 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::model_bundle::{self, BundleFile, ModelBundle};
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptionModelId {
@@ -25,6 +27,8 @@ pub enum TranscriptionModelId {
     SenseVoiceSmall,
     CohereTranscribe,
     AppleSpeech,
+    #[serde(rename = "phonon_2_coreml_en")]
+    Phonon2CoreMlEnglish,
 }
 
 impl TranscriptionModelId {
@@ -38,6 +42,7 @@ impl TranscriptionModelId {
             Self::SenseVoiceSmall => "sense_voice_small",
             Self::CohereTranscribe => "cohere_transcribe",
             Self::AppleSpeech => "apple_speech",
+            Self::Phonon2CoreMlEnglish => "phonon_2_coreml_en",
         }
     }
 }
@@ -55,6 +60,7 @@ impl FromStr for TranscriptionModelId {
             "sense_voice_small" => Ok(Self::SenseVoiceSmall),
             "cohere_transcribe" => Ok(Self::CohereTranscribe),
             "apple_speech" => Ok(Self::AppleSpeech),
+            "phonon_2_coreml_en" => Ok(Self::Phonon2CoreMlEnglish),
             _ => Err(eyre!("unknown transcription model: {value}")),
         }
     }
@@ -114,6 +120,7 @@ pub enum Recommendation {
     Fastest,
     MostAccurate,
     RecognitionHints,
+    NeuralEngine,
 }
 
 impl Recommendation {
@@ -123,6 +130,7 @@ impl Recommendation {
             Self::Fastest => "Fastest",
             Self::MostAccurate => "Most accurate",
             Self::RecognitionHints => "Recognition hints",
+            Self::NeuralEngine => "Neural Engine",
         }
     }
 }
@@ -152,6 +160,9 @@ pub struct ModelDefinition {
 pub enum ModelRuntime {
     Gguf(&'static GgufArtifact),
     AppleSpeech,
+    /// A pinned multi-file Core ML bundle run through the native Phonon
+    /// bridge. Available only on Apple silicon macOS.
+    PhononCoreMl(&'static ModelBundle),
 }
 
 pub struct GgufArtifact {
@@ -166,7 +177,19 @@ pub struct GgufArtifact {
 
 impl ModelDefinition {
     pub const fn available(&self) -> bool {
-        !matches!(self.runtime, ModelRuntime::AppleSpeech)
+        match self.runtime {
+            ModelRuntime::Gguf(_) => true,
+            ModelRuntime::AppleSpeech => false,
+            ModelRuntime::PhononCoreMl(_) => PHONON_SUPPORTED,
+        }
+    }
+
+    /// Hex downloads, verifies and can delete this model's files.
+    pub const fn downloadable(&self) -> bool {
+        matches!(
+            self.runtime,
+            ModelRuntime::Gguf(_) | ModelRuntime::PhononCoreMl(_)
+        )
     }
 
     fn download_url(&self) -> Result<String> {
@@ -215,6 +238,7 @@ impl ModelDefinition {
                 format!("{:.1} GB", artifact.bytes as f64 / 1_000_000_000.0)
             }
             ModelRuntime::Gguf(artifact) => format!("{} MB", artifact.bytes / 1_000_000),
+            ModelRuntime::PhononCoreMl(bundle) => format!("{} MB", bundle.bytes() / 1_000_000),
         }
     }
 
@@ -222,6 +246,7 @@ impl ModelDefinition {
         match self.runtime {
             ModelRuntime::Gguf(artifact) => Some(artifact.bytes),
             ModelRuntime::AppleSpeech => None,
+            ModelRuntime::PhononCoreMl(bundle) => Some(bundle.bytes()),
         }
     }
 }
@@ -300,6 +325,61 @@ const COHERE_ARTIFACT: GgufArtifact = GgufArtifact {
     sha256: "931916663432fd895423a4291a8400221802b288967ca2d435fc5e3141c9e71e",
     architecture: "cohere_asr",
     variant: "cohere-transcribe-03-2026",
+};
+
+/// Phonon's encoder uses Float16 Core ML functions and a prebuilt arm64
+/// decoder; the bridge is compiled only for Apple silicon macOS.
+pub const PHONON_SUPPORTED: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+
+/// FermionResearch/Phonon-2-CoreML at a pinned revision. Sizes and SHA-256
+/// values match the revision's Hugging Face metadata and `SHA256SUMS`. The
+/// licence and notice files travel with the CC-BY-4.0 weights.
+const PHONON_2_COREML_BUNDLE: ModelBundle = ModelBundle {
+    directory: "phonon-2-coreml-1143812f",
+    repository: "FermionResearch/Phonon-2-CoreML",
+    revision: "1143812fd4236522232a8c33e3115f0577e3cd7d",
+    files: &[
+        BundleFile {
+            path: "manifest.json",
+            bytes: 1_428,
+            sha256: "ab3fb5dfd3fc07b1d8a24379d04418f458d0443ba6359d3a5ab2f098a7d64089",
+        },
+        BundleFile {
+            path: "decoder.bin",
+            bytes: 13_301_279,
+            sha256: "36fa7202dda85c603af60d930ab88d7e9f0d2a619490aff46f5384db924cfa70",
+        },
+        BundleFile {
+            path: "Phonon-2.mlpackage/Manifest.json",
+            bytes: 617,
+            sha256: "6ebc9309aea0e16bda9c7558521fef6307fac0afba9a5b4959fea45ed7cd0429",
+        },
+        BundleFile {
+            path: "Phonon-2.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+            bytes: 2_500_482,
+            sha256: "4f6790ec94fe4429b10397c013563d0a51119953ff6d3da466bbcb23a25dee2a",
+        },
+        BundleFile {
+            path: "Phonon-2.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+            bytes: 329_186_560,
+            sha256: "93aa991318a00ed492fdbb724e7bca4e6a69c6cf671ab4f14a14ef6101e7648b",
+        },
+        BundleFile {
+            path: "NOTICE",
+            bytes: 3_084,
+            sha256: "b468a23a1ce2c5181ea4050432bb68713a6468ce2e452927228d24f3d56226be",
+        },
+        BundleFile {
+            path: "LICENSE-WEIGHTS-CC-BY-4.0.txt",
+            bytes: 18_657,
+            sha256: "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+        },
+        BundleFile {
+            path: "LICENSE-CODE-Apache-2.0.txt",
+            bytes: 11_358,
+            sha256: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        },
+    ],
 };
 
 pub const MODELS: &[ModelDefinition] = &[
@@ -416,6 +496,20 @@ pub const MODELS: &[ModelDefinition] = &[
         supports_language_detection: false,
         supports_recognition_hints: false,
     },
+    ModelDefinition {
+        id: TranscriptionModelId::Phonon2CoreMlEnglish,
+        name: "Phonon-2 Core ML",
+        realtime: "Neural Engine",
+        quality: "5.21%",
+        quality_context: "Vendor 7-set average",
+        coverage: "English",
+        timestamps: "Word timestamps",
+        runtime: ModelRuntime::PhononCoreMl(&PHONON_2_COREML_BUNDLE),
+        languages: &["en"],
+        accepts_language_hint: false,
+        supports_language_detection: false,
+        supports_recognition_hints: false,
+    },
 ];
 
 pub const AUTO_LANGUAGE: &str = "auto";
@@ -497,7 +591,7 @@ pub(crate) fn choices_for_runtime(language: &str) -> Vec<ModelChoice> {
                 Recommendation::Recommended,
             ),
         ],
-        "en" => vec![
+        "en" => [
             choice(
                 TranscriptionModelId::ParakeetUnifiedEnglish,
                 Recommendation::Recommended,
@@ -510,7 +604,14 @@ pub(crate) fn choices_for_runtime(language: &str) -> Vec<ModelChoice> {
                 TranscriptionModelId::WhisperLargeV3Turbo,
                 Recommendation::RecognitionHints,
             ),
-        ],
+            choice(
+                TranscriptionModelId::Phonon2CoreMlEnglish,
+                Recommendation::NeuralEngine,
+            ),
+        ]
+        .into_iter()
+        .filter(|choice| choice.model.available())
+        .collect(),
         "zh" | "yue" | "ja" | "ko" => vec![
             choice(
                 TranscriptionModelId::Qwen3Asr06B,
@@ -594,11 +695,15 @@ pub fn max_audio_chunk_samples(architecture: &str, max_audio_ms: i64) -> Option<
         .checked_mul(16)
 }
 
+/// The GGUF file, or the directory of a multi-file bundle.
 pub fn model_path(model: &ModelDefinition) -> Result<PathBuf> {
-    let ModelRuntime::Gguf(artifact) = model.runtime else {
-        bail!("{} is managed by macOS and has no model path", model.name);
-    };
-    Ok(models_dir()?.join(artifact.filename))
+    match model.runtime {
+        ModelRuntime::Gguf(artifact) => Ok(models_dir()?.join(artifact.filename)),
+        ModelRuntime::PhononCoreMl(bundle) => Ok(bundle.path(&models_dir()?)),
+        ModelRuntime::AppleSpeech => {
+            bail!("{} is managed by macOS and has no model path", model.name)
+        }
+    }
 }
 
 pub fn is_installed(model: &ModelDefinition, language: &str) -> bool {
@@ -608,6 +713,10 @@ pub fn is_installed(model: &ModelDefinition, language: &str) -> bool {
         ModelRuntime::Gguf(artifact) => model_path(model)
             .and_then(|path| Ok(fs::metadata(path)?.len() == artifact.bytes))
             .unwrap_or(false),
+        ModelRuntime::PhononCoreMl(bundle) => {
+            model.available()
+                && models_dir().is_ok_and(|models| model_bundle::is_complete(&models, bundle))
+        }
         #[cfg(target_os = "macos")]
         ModelRuntime::AppleSpeech => crate::apple_speech::AppleSpeech::is_ready(language),
         #[cfg(not(target_os = "macos"))]
@@ -616,6 +725,10 @@ pub fn is_installed(model: &ModelDefinition, language: &str) -> bool {
 }
 
 pub fn is_verified(model: &ModelDefinition) -> bool {
+    if let ModelRuntime::PhononCoreMl(bundle) = model.runtime {
+        return model.available()
+            && models_dir().is_ok_and(|models| model_bundle::is_verified(&models, bundle));
+    }
     let Ok(path) = model_path(model) else {
         return false;
     };
@@ -626,6 +739,18 @@ pub fn is_verified(model: &ModelDefinition) -> bool {
 pub fn verify_installed(model: &ModelDefinition, canceled: &AtomicBool) -> Result<PathBuf> {
     check_canceled(canceled)?;
     let path = model_path(model)?;
+    if let ModelRuntime::PhononCoreMl(bundle) = model.runtime {
+        let models = models_dir()?;
+        if !model_bundle::is_complete(&models, bundle) {
+            bail!(
+                "{} is no longer installed. Open Settings to download it.",
+                model.name
+            );
+        }
+        let _lock = lock_downloads(&models, canceled)?;
+        model_bundle::verify_installed(&models, bundle, canceled)?;
+        return Ok(path);
+    }
     verify_installed_at(&path, model, canceled)?;
     Ok(path)
 }
@@ -650,10 +775,32 @@ fn verify_installed_at(path: &Path, model: &ModelDefinition, canceled: &AtomicBo
 /// Deletes a downloaded model with its verification receipt and any partial
 /// download. Refuses instead of waiting while a download owns the directory.
 pub fn remove_installed(model: &ModelDefinition) -> Result<()> {
-    if !matches!(model.runtime, ModelRuntime::Gguf(_)) {
-        bail!("{} is managed by macOS and cannot be deleted", model.name);
+    match model.runtime {
+        ModelRuntime::Gguf(_) => remove_installed_at(&model_path(model)?),
+        ModelRuntime::PhononCoreMl(bundle) => {
+            let models = models_dir()?;
+            if !models.is_dir() {
+                return Ok(());
+            }
+            let _lock = try_lock_downloads(&models)?;
+            model_bundle::remove(&models, bundle)
+        }
+        ModelRuntime::AppleSpeech => {
+            bail!("{} is managed by macOS and cannot be deleted", model.name)
+        }
     }
-    remove_installed_at(&model_path(model)?)
+}
+
+/// Takes the models directory download lock without waiting.
+fn try_lock_downloads(directory: &Path) -> Result<File> {
+    let lock = File::create(directory.join(".download.lock"))?;
+    match lock.try_lock_exclusive() {
+        Ok(()) => Ok(lock),
+        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+            bail!("A model download is in progress. Try again when it finishes.")
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn remove_installed_at(path: &Path) -> Result<()> {
@@ -661,14 +808,7 @@ fn remove_installed_at(path: &Path) -> Result<()> {
     if !directory.is_dir() {
         return Ok(());
     }
-    let lock = File::create(directory.join(".download.lock"))?;
-    match lock.try_lock_exclusive() {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::WouldBlock => {
-            bail!("A model download is in progress. Try again when it finishes.")
-        }
-        Err(error) => return Err(error.into()),
-    }
+    let _lock = try_lock_downloads(directory)?;
     for file in [
         path.to_path_buf(),
         verification_receipt_path(path),
@@ -737,8 +877,27 @@ pub fn download_with_stage_progress(
     downloaded_bytes: &AtomicU64,
     stage: &AtomicU8,
 ) -> Result<PathBuf> {
-    let ModelRuntime::Gguf(artifact) = model.runtime else {
-        bail!("{} is installed and managed by macOS", model.name);
+    let artifact = match model.runtime {
+        ModelRuntime::Gguf(artifact) => artifact,
+        ModelRuntime::PhononCoreMl(bundle) => {
+            if !model.available() {
+                bail!("{} requires a Mac with Apple silicon", model.name);
+            }
+            ModelPreparationStage::Downloading.store(stage);
+            check_canceled(canceled)?;
+            let directory = models_dir()?;
+            fs::create_dir_all(&directory)?;
+            let _lock = lock_downloads(&directory, canceled)?;
+            return model_bundle::install(
+                &directory,
+                bundle,
+                canceled,
+                downloaded_bytes,
+                stage,
+                &curl_download,
+            );
+        }
+        ModelRuntime::AppleSpeech => bail!("{} is installed and managed by macOS", model.name),
     };
     ModelPreparationStage::Downloading.store(stage);
     check_canceled(canceled)?;
@@ -792,6 +951,36 @@ pub fn download_with_stage_progress(
         }
     }
     ModelPreparationStage::Downloading.store(stage);
+    curl_download(&model.download_url()?, &partial, canceled, &|bytes| {
+        downloaded_bytes.store(bytes, Ordering::Relaxed);
+    })?;
+    check_canceled(canceled)?;
+    if let Err(error) = verify_and_promote_partial(
+        &partial,
+        &destination,
+        &directory,
+        model,
+        canceled,
+        downloaded_bytes,
+        stage,
+    ) {
+        if !canceled.load(Ordering::Relaxed) {
+            let _ = fs::remove_file(&partial);
+        }
+        return Err(error);
+    }
+    Ok(destination)
+}
+
+/// Downloads `url` to `output`, resuming bytes already present and reporting
+/// the current output size until curl exits or `canceled` is set.
+fn curl_download(
+    url: &str,
+    output: &Path,
+    canceled: &AtomicBool,
+    progress: &dyn Fn(u64),
+) -> Result<()> {
+    let partial = output;
     let mut child = Command::new("curl")
         .args([
             "--fail",
@@ -810,16 +999,13 @@ pub fn download_with_stage_progress(
             "--show-error",
             "--output",
         ])
-        .arg(&partial)
-        .arg(model.download_url()?)
+        .arg(partial)
+        .arg(url)
         .stderr(Stdio::piped())
         .spawn()
         .wrap_err("could not start model download")?;
     let status = loop {
-        downloaded_bytes.store(
-            fs::metadata(&partial).map_or(0, |metadata| metadata.len()),
-            Ordering::Relaxed,
-        );
+        progress(fs::metadata(partial).map_or(0, |metadata| metadata.len()));
         if canceled.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
@@ -844,22 +1030,8 @@ pub fn download_with_stage_progress(
             stderr.trim()
         );
     }
-    check_canceled(canceled)?;
-    if let Err(error) = verify_and_promote_partial(
-        &partial,
-        &destination,
-        &directory,
-        model,
-        canceled,
-        downloaded_bytes,
-        stage,
-    ) {
-        if !canceled.load(Ordering::Relaxed) {
-            let _ = fs::remove_file(&partial);
-        }
-        return Err(error);
-    }
-    Ok(destination)
+    progress(fs::metadata(partial).map_or(0, |metadata| metadata.len()));
+    Ok(())
 }
 
 fn verify_and_promote_partial(
@@ -1041,6 +1213,10 @@ mod tests {
             (TranscriptionModelId::SenseVoiceSmall, "sense_voice_small"),
             (TranscriptionModelId::CohereTranscribe, "cohere_transcribe"),
             (TranscriptionModelId::AppleSpeech, "apple_speech"),
+            (
+                TranscriptionModelId::Phonon2CoreMlEnglish,
+                "phonon_2_coreml_en",
+            ),
         ] {
             assert_eq!(id.as_str(), name);
             assert_eq!(name.parse::<TranscriptionModelId>().unwrap(), id);
@@ -1267,6 +1443,87 @@ mod tests {
         remove_installed_at(&path).unwrap();
         remove_installed_at(&directory.join("missing").join("fixture.gguf")).unwrap();
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn phonon_is_an_opt_in_english_bundle_on_apple_silicon_only() {
+        let phonon = definition(TranscriptionModelId::Phonon2CoreMlEnglish);
+        let ModelRuntime::PhononCoreMl(bundle) = phonon.runtime else {
+            panic!("Phonon must use the Core ML bundle runtime");
+        };
+        assert_eq!(bundle.bytes(), 345_023_465);
+        assert_eq!(phonon.download_bytes(), Some(345_023_465));
+        assert_eq!(phonon.size_label(), "345 MB");
+        assert!(phonon.downloadable());
+        assert_eq!(phonon.available(), PHONON_SUPPORTED);
+        assert_eq!(phonon.presentation_languages(), ["en"]);
+        assert!(!phonon.supports_language_detection);
+        assert!(!phonon.supports_recognition_hints);
+        assert_eq!(phonon.runtime_language_hint("en"), None);
+        assert!(bundle.revision.len() == 40 && bundle.directory.ends_with(&bundle.revision[..8]));
+        assert_eq!(
+            bundle.url(&bundle.files[0]),
+            "https://huggingface.co/FermionResearch/Phonon-2-CoreML/resolve/\
+             1143812fd4236522232a8c33e3115f0577e3cd7d/manifest.json"
+        );
+        // The existing default and its recommendation stay unchanged.
+        assert_eq!(
+            TranscriptionModelId::default(),
+            TranscriptionModelId::ParakeetUnifiedEnglish
+        );
+        let english = choices_for_runtime("en");
+        assert_eq!(
+            english[0].model.id,
+            TranscriptionModelId::ParakeetUnifiedEnglish
+        );
+        let listed = english
+            .iter()
+            .find(|choice| choice.model.id == phonon.id)
+            .map(|choice| choice.recommendation);
+        assert_eq!(
+            listed,
+            PHONON_SUPPORTED.then_some(Recommendation::NeuralEngine)
+        );
+        for language in [AUTO_LANGUAGE, "fr", "zh"] {
+            assert!(
+                choices_for_runtime(language)
+                    .iter()
+                    .all(|choice| choice.model.id != phonon.id)
+            );
+        }
+        let english_selection = TranscriptionSelection {
+            model: phonon.id,
+            ..TranscriptionSelection::default()
+        };
+        assert_eq!(validate(&english_selection).is_ok(), PHONON_SUPPORTED);
+        for selection in [
+            TranscriptionSelection {
+                language: "fr".into(),
+                ..english_selection.clone()
+            },
+            TranscriptionSelection {
+                language: AUTO_LANGUAGE.into(),
+                ..english_selection.clone()
+            },
+            TranscriptionSelection {
+                recognition_hints: "OpenCode".into(),
+                ..english_selection.clone()
+            },
+        ] {
+            assert!(validate(&selection).is_err());
+        }
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[test]
+    fn unsupported_platforms_never_install_or_load_phonon() {
+        let phonon = definition(TranscriptionModelId::Phonon2CoreMlEnglish);
+        assert!(!is_installed(phonon, "en"));
+        assert!(!is_verified(phonon));
+        let error = download_with_progress(phonon, &AtomicBool::new(false), &AtomicU64::new(0))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Apple silicon"), "{error}");
     }
 
     #[test]

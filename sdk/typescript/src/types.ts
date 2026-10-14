@@ -7,6 +7,7 @@ export const MODEL_IDS = [
   "sense_voice_small",
   "cohere_transcribe",
   "apple_speech",
+  "phonon_2_coreml_en",
 ] as const
 
 export type ModelId = typeof MODEL_IDS[number]

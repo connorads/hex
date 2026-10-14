@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use crate::transcription_models::{ModelRuntime, TranscriptionModelId, TranscriptionSelection};
+use crate::transcription_models::{TranscriptionModelId, TranscriptionSelection};
 
 type Prepare = dyn Fn(&TranscriptionSelection, bool, &AtomicBool, &AtomicU64) -> Result<(), String>
     + Send
@@ -187,7 +187,7 @@ fn prepare_selection(
     };
     (|| -> color_eyre::Result<()> {
         let model = crate::transcription_models::validate(selection)?;
-        if matches!(model.runtime, ModelRuntime::Gguf(_)) {
+        if model.downloadable() {
             if installed_only {
                 crate::transcription_models::verify_installed(model, canceled)?;
                 progress.store(model.download_bytes().unwrap_or(0), Ordering::Relaxed);

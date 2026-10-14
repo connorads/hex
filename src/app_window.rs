@@ -58,8 +58,8 @@ use crate::text_input::{
     Submitted as TextSubmitted, TextInput,
 };
 use crate::transcription_models::{
-    ModelDefinition, ModelRuntime, TranscriptionModelId, TranscriptionSelection, definition,
-    language_name, validate,
+    ModelDefinition, TranscriptionModelId, TranscriptionSelection, definition, language_name,
+    validate,
 };
 use crate::transcription_preparation::{PreparationStatus, TranscriptionPreparation};
 
@@ -1483,8 +1483,7 @@ impl AppWindow {
                         .into_iter()
                         .map(|choice| choice.model)
                         .find(|model| {
-                            matches!(model.runtime, ModelRuntime::Gguf(_))
-                                && model.id != settings.transcription.model
+                            model.downloadable() && model.id != settings.transcription.model
                         })
                         .map(|model| model.id)
                 }),
@@ -2033,7 +2032,7 @@ impl AppWindow {
         installed: bool,
     ) -> ModelDeletion {
         if !installed
-            || !matches!(model.runtime, ModelRuntime::Gguf(_))
+            || !model.downloadable()
             || self.settings.transcription.model == model.id
             || self.transcription_status.model == Some(model.id)
         {
@@ -3229,7 +3228,8 @@ impl AppWindow {
                     } else {
                         TranscriptionPickerStatus::Preparing {
                             label: format!("Downloading {:.0}%", progress * 100.0),
-                            progress: matches!(model.runtime, ModelRuntime::Gguf(_))
+                            progress: model
+                                .downloadable()
                                 .then_some(TranscriptionPickerProgress::Downloading(progress)),
                         }
                     }
@@ -8784,9 +8784,7 @@ mod tests {
                 let other = crate::transcription_models::choices_for_runtime("en")
                     .into_iter()
                     .map(|choice| choice.model)
-                    .find(|model| {
-                        matches!(model.runtime, ModelRuntime::Gguf(_)) && model.id != current.id
-                    })
+                    .find(|model| model.downloadable() && model.id != current.id)
                     .unwrap();
 
                 assert_eq!(
