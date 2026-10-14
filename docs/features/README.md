@@ -129,6 +129,29 @@ metadata inspection establish the prompting limitation, not the cause or repair
 of those transcripts. No v3 audio reproduction or transcription-quality fix has
 been demonstrated.
 
+```ts
+Choose English -> Phonon-2 Core ML         // setup.phonon-coreml; Apple silicon only
+  -> Download 8 pinned files to staging -> Verify each SHA-256 -> Publish atomically
+  -> Compile Core ML once beside the bundle -> Load every encoder function -> Prewarm
+     ├── Success -> Save selection; dictation uses Phonon with unpadded audio
+     └── Failure or cancel -> Previous model and selection stay active
+Intel Mac or Linux -> Not listed; persisted selection resets (macOS) or is refused (Linux)
+```
+
+Sources: `PHONON_2_COREML_BUNDLE` in
+[transcription_models.rs](../../src/transcription_models.rs),
+[model_bundle.rs](../../src/model_bundle.rs), [phonon.rs](../../src/phonon.rs),
+[phonon.swift](../../src/phonon.swift) and [build.rs](../../build.rs); see
+[docs/phonon-coreml.md](../phonon-coreml.md). Portable checks:
+`phonon_is_an_opt_in_english_bundle_on_apple_silicon_only`,
+`unsupported_platforms_never_install_or_load_phonon` and the `model_bundle`
+installer tests (interruption, corruption, cancellation, tampering, symlinks,
+removal). Real Core ML checks are the ignored `phonon::native` tests and
+`phonon_activation_preserves_the_active_model_and_removal_unloads_cleanly`, run
+by the `Check macOS Phonon` workflow on a hosted arm64 VM without a Neural Engine.
+They do not cover the physical hotkey -> paste path, Neural Engine timings or a
+signed app; those still need a real Mac.
+
 Checks start in [onboarding.rs](../../src/onboarding.rs),
 [transcription.rs](../../src/transcription.rs), and
 [transcription_models.rs](../../src/transcription_models.rs). Setup/picker previews
@@ -186,6 +209,7 @@ Settings picker > Downloaded model card   // setup.delete-model; macOS
 │   └── Download in progress -> Nothing removed; "Model could not be deleted." with reason
 ├── Selected dictation model (any language) -> No Delete
 ├── Preparing or Apple Speech model -> No Delete
+├── Phonon -> Delete removes bundle, compiled model, receipt and staging
 └── Language change, model choice, or closing the picker -> Confirmation cleared
 ```
 

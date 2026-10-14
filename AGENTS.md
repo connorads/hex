@@ -66,6 +66,12 @@ substitute for source inspection or a second roadmap.
   processing, ordered output, paste, last-result, and meeting-delta workers.
 - `apple_speech`: the Swift `SpeechAnalyzer` bridge with per-locale support
   checks, asset reservation, and batch transcription.
+- `phonon`: the Apple-silicon-only Phonon-2 Core ML backend: a narrow C ABI over
+  the pinned PhononCoreML Swift sources compiled into the binary, one warm
+  session owned by the inference worker, and unpadded 16 kHz input. See
+  `docs/phonon-coreml.md`.
+- `model_bundle`: pinned multi-file model bundles with private staging,
+  per-file SHA-256 verification, receipts, and atomic publication.
 - `transcription`: runtime selection and transactional warm-model activation.
 - `gguf_session`: the `transcribe.cpp` session owner shared by `parakeet` and
   `linux_transcriber`; it recreates the native session around each run so
