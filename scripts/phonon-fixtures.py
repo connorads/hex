@@ -113,12 +113,19 @@ def main() -> None:
     protocol.mkdir(exist_ok=True)
     for name, prompt in PROTOCOL.items():
         aiff = protocol / f"{name}.aiff"
-        subprocess.run(["say", "-v", "Samantha", "-r", "165", "-o", str(aiff), prompt], check=True)
-        subprocess.run(
-            ["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(aiff), str(protocol / f"{name}.wav")],
-            check=True,
-        )
-        aiff.unlink()
+        wav = protocol / f"{name}.wav"
+        # say occasionally writes a near-empty file on headless machines.
+        for _ in range(3):
+            subprocess.run(["say", "-v", "Samantha", "-r", "165", "-o", str(aiff), prompt], check=True)
+            subprocess.run(
+                ["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(aiff), str(wav)],
+                check=True,
+            )
+            aiff.unlink()
+            if len(frames(wav)) >= RATE * 2:
+                break
+        else:
+            sys.exit(f"say produced no usable speech for {name}")
     print(f"wrote {len(corpus)} fixtures to {output}")
 
 

@@ -5,7 +5,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 support="${HEX_APPLICATION_SUPPORT_DIR:-$HOME/Library/Application Support/voice-control}"
 discovery="$support/local-api.json"
 model=${HEX_SMOKE_MODEL:-parakeet_unified_en}
-audio="${TMPDIR:-/tmp}/hex-transcription-smoke.wav"
+generated="${TMPDIR:-/tmp}/hex-transcription-smoke.wav"
+audio=${HEX_SMOKE_AUDIO:-$generated}
+expect=${HEX_SMOKE_EXPECT:-}
 events="${TMPDIR:-/tmp}/hex-transcription-prepare.ndjson"
 service_pid=
 
@@ -28,7 +30,7 @@ cleanup() {
   if [ -n "$service_pid" ]; then
     wait "$service_pid" 2>/dev/null || true
   fi
-  rm -f "$audio" "$audio.aiff" "$events"
+  rm -f "$generated" "$generated.aiff" "$events"
 }
 trap cleanup EXIT INT TERM
 
@@ -67,10 +69,23 @@ if ! grep -Fq '"type":"ok"' "$events"; then
   tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
   exit 1
 fi
+if [ -n "$expect" ] && ! printf '%s\n' "$result" | jq -e --arg expect "$expect" \
+  '.transcript | ascii_downcase | contains($expect | ascii_downcase)' >/dev/null; then
+  echo "Transcription does not contain: $expect" >&2
+  exit 1
+fi
 
-/usr/bin/say "Hello from the local HEX transcription service." -o "$audio.aiff"
-/usr/bin/afconvert -f WAVE -d LEI16@16000 "$audio.aiff" "$audio"
-rm -f "$audio.aiff"
+if [ -z "${HEX_SMOKE_AUDIO:-}" ]; then
+  /usr/bin/say "Hello from the local HEX transcription service." -o "$generated.aiff"
+  /usr/bin/afconvert -f WAVE -d LEI16@16000 "$generated.aiff" "$generated"
+  rm -f "$generated.aiff"
+  # say occasionally writes a near-empty file on headless machines; that is
+  # not a transcription result, so refuse it instead of reporting empty text.
+  if [ "$(wc -c < "$generated")" -lt 16000 ]; then
+    echo "say produced no usable speech; set HEX_SMOKE_AUDIO to a WAV file." >&2
+    exit 1
+  fi
+fi
 
 result=$(curl --fail --silent --show-error \
   -X POST \
