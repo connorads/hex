@@ -79,10 +79,19 @@ impl Phonon {
     pub fn load_selection(selection: &TranscriptionSelection) -> Result<Self> {
         let definition = validate(selection)?;
         if !crate::transcription_models::is_verified(definition) {
-            bail!(
-                "{} is not installed or has not been verified. Open Settings to download it.",
-                definition.name
-            );
+            if !crate::transcription_models::is_installed(definition, &selection.language) {
+                bail!(
+                    "{} is not installed. Open Settings to download it.",
+                    definition.name
+                );
+            }
+            // A complete bundle whose receipt is missing or stale (for
+            // example after a restore changed modification times) is hashed
+            // again here; it never downloads or replaces files.
+            crate::transcription_models::verify_installed(
+                definition,
+                &std::sync::atomic::AtomicBool::new(false),
+            )?;
         }
         let mut phonon = Self::load_from(&model_path(definition)?, LoadOptions::default())?;
         phonon.selection = Some(selection.clone());

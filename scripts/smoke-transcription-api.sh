@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-support="$HOME/Library/Application Support/voice-control"
+support="${HEX_APPLICATION_SUPPORT_DIR:-$HOME/Library/Application Support/voice-control}"
 discovery="$support/local-api.json"
 model=${HEX_SMOKE_MODEL:-parakeet_unified_en}
 audio="${TMPDIR:-/tmp}/hex-transcription-smoke.wav"
@@ -37,8 +37,12 @@ if [ -e "$discovery" ]; then
   exit 1
 fi
 
-cargo build --manifest-path "$root/Cargo.toml"
-"$root/target/debug/voice-control" service >/dev/null 2>&1 &
+binary=${HEX_SMOKE_BINARY:-}
+if [ -z "$binary" ]; then
+  cargo build --manifest-path "$root/Cargo.toml"
+  binary="$root/target/debug/voice-control"
+fi
+"$binary" service >/dev/null 2>&1 &
 service_pid=$!
 
 attempts=100

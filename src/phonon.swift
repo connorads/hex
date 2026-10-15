@@ -66,8 +66,14 @@ private final class PhononSession {
         // eagerly and the others on first use.
         if eagerAllFunctions { options.eagerFunctions = manifest.functions_s }
         let transcriber = try Transcriber(bundle: bundle, options: options)
+        // The first prediction of each encoder function is far slower than
+        // later ones, so run one per loaded function now rather than in the
+        // first dictation of that length. Each signal fits only its function.
         let prewarmStarted = Date()
-        _ = try transcriber.transcribe(PhononSession.prewarmSignal())
+        for seconds in transcriber.loadedFunctions {
+            let samples = min(Int((Double(seconds) - 0.5) * 16_000), singleShotMaxSamples)
+            _ = try transcriber.transcribe(PhononSession.prewarmSignal(samples: samples))
+        }
         transcriber.resetTiming()
         self.transcriber = transcriber
         report = BridgeLoadReport(
@@ -90,6 +96,11 @@ private final class PhononSession {
         let compiled = bundle.appendingPathComponent(name).appendingPathExtension("mlmodelc")
         let files = FileManager.default
         if files.fileExists(atPath: compiled.path) { return }
+        // Remove staging left by a process that stopped mid-compile.
+        for leftover in (try? files.contentsOfDirectory(atPath: bundle.path)) ?? []
+        where leftover.hasPrefix(".\(name)-") && leftover.hasSuffix(".mlmodelc") {
+            try? files.removeItem(at: bundle.appendingPathComponent(leftover))
+        }
         let temporary = try MLModel.compileModel(at: bundle.appendingPathComponent(manifest.multifunction))
         let staged = bundle.appendingPathComponent(".\(name)-\(UUID().uuidString).mlmodelc")
         defer {
@@ -102,11 +113,11 @@ private final class PhononSession {
         }
     }
 
-    /// One second of deterministic low-level noise: above the package's
-    /// silence gate, so the prewarm runs the mel, encoder and decoder path.
-    static func prewarmSignal() -> [Float] {
+    /// Deterministic low-level noise: above the package's silence gate, so
+    /// the prewarm runs the mel, encoder and decoder path.
+    static func prewarmSignal(samples: Int) -> [Float] {
         var state: UInt32 = 0x1234_5678
-        return (0..<16_000).map { _ in
+        return (0..<samples).map { _ in
             state = state &* 1_664_525 &+ 1_013_904_223
             return (Float(state >> 8) / Float(1 << 24) - 0.5) * 0.02
         }
