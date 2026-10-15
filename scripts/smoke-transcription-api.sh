@@ -69,11 +69,6 @@ if ! grep -Fq '"type":"ok"' "$events"; then
   tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
   exit 1
 fi
-if [ -n "$expect" ] && ! printf '%s\n' "$result" | jq -e --arg expect "$expect" \
-  '.transcript | ascii_downcase | contains($expect | ascii_downcase)' >/dev/null; then
-  echo "Transcription does not contain: $expect" >&2
-  exit 1
-fi
 
 if [ -z "${HEX_SMOKE_AUDIO:-}" ]; then
   /usr/bin/say "Hello from the local HEX transcription service." -o "$generated.aiff"
@@ -97,5 +92,10 @@ printf '%s\n' "$result" | jq .
 if ! printf '%s\n' "$result" | jq -e '.transcript | length > 0' >/dev/null; then
   echo "Transcription returned no text. Service log:" >&2
   tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
+  exit 1
+fi
+if [ -n "$expect" ] && ! printf '%s\n' "$result" | jq -e --arg expect "$expect" \
+  '.transcript | ascii_downcase | contains($expect | ascii_downcase)' >/dev/null; then
+  echo "Transcription does not contain: $expect" >&2
   exit 1
 fi
