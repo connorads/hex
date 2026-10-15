@@ -132,7 +132,8 @@ been demonstrated.
 ```ts
 Choose English -> Phonon-2 Core ML         // setup.phonon-coreml; Apple silicon only
   -> Download 8 pinned files to staging -> Verify each SHA-256 -> Publish atomically
-  -> Compile Core ML once beside the bundle -> Load every encoder function -> Prewarm
+  -> Compile Core ML once beside the bundle -> Load every encoder function once -> Prewarm
+  -> Warm dictation session loads its functions lazily
      ├── Success -> Save selection; dictation uses Phonon with unpadded audio
      └── Failure or cancel -> Previous model and selection stay active
 Intel Mac or Linux -> Not listed; persisted selection resets (macOS) or is refused (Linux)

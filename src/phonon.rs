@@ -50,15 +50,15 @@ pub struct LoadOptions {
 }
 
 impl Default for LoadOptions {
+    /// The warm dictation session: the package's lazy default keeps only
+    /// its 15 s function resident until another length needs one.
     fn default() -> Self {
         Self {
             single_shot_max_samples: None,
-            eager_all_functions: EAGER_ALL_FUNCTIONS,
+            eager_all_functions: false,
         }
     }
 }
-
-const EAGER_ALL_FUNCTIONS: bool = true;
 
 pub struct Phonon {
     session: NonNull<c_void>,
@@ -74,6 +74,28 @@ impl Phonon {
     /// Loads the verified bundle for `selection`. Never downloads: an
     /// unverified bundle is an error that leaves the caller's model in place.
     pub fn load_selection(selection: &TranscriptionSelection) -> Result<Self> {
+        Self::load_selection_with(selection, LoadOptions::default())
+    }
+
+    /// Model preparation: load every encoder function once, so the first
+    /// Neural Engine compile of each happens now rather than in the first
+    /// dictation of that length, then release the session. Later lazy loads
+    /// reuse the system's compiled programs.
+    pub fn prepare(selection: &TranscriptionSelection) -> Result<()> {
+        Self::load_selection_with(
+            selection,
+            LoadOptions {
+                eager_all_functions: true,
+                ..LoadOptions::default()
+            },
+        )
+        .map(drop)
+    }
+
+    fn load_selection_with(
+        selection: &TranscriptionSelection,
+        options: LoadOptions,
+    ) -> Result<Self> {
         let definition = validate(selection)?;
         if !crate::transcription_models::is_verified(definition) {
             if !crate::transcription_models::is_installed(definition, &selection.language) {
@@ -90,7 +112,7 @@ impl Phonon {
                 &std::sync::atomic::AtomicBool::new(false),
             )?;
         }
-        let mut phonon = Self::load_from(&model_path(definition)?, LoadOptions::default())?;
+        let mut phonon = Self::load_from(&model_path(definition)?, options)?;
         phonon.selection = Some(selection.clone());
         Ok(phonon)
     }

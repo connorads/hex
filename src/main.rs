@@ -723,7 +723,7 @@ fn install_transcription_model(id: &transcription_models::TranscriptionModelId) 
     )?;
     let downloaded = started.elapsed();
     let started = std::time::Instant::now();
-    transcription::Transcriber::load_selection(&selection)?;
+    transcription::Transcriber::prepare_selection(&selection)?;
     println!(
         "{}",
         serde_json::json!({

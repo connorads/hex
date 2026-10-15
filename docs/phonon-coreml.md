@@ -12,11 +12,12 @@ unchanged.
 Settings / menu bar / local API -> select phonon_2_coreml_en
   -> transcription_models: ModelRuntime::PhononCoreMl(bundle)
      -> model_bundle::install           // staged, per-file SHA-256, atomic publish
-  -> transcription_preparation -> Transcriber::load_selection
-     -> phonon::Phonon::load_selection  // requires a verified receipt; never downloads
+  -> transcription_preparation -> Transcriber::prepare_selection
+     -> phonon::Phonon::prepare         // requires a verified receipt; never downloads
         -> hex_phonon_create            // src/phonon.swift
            -> compile <bundle>/Phonon-2.mlmodelc once (atomic rename)
-           -> load every encoder function, prewarm one second of noise
+           -> load every encoder function once, prewarm, release
+  -> worker: Phonon::load_selection     // warm session, lazy functions
   -> dictation job (selection snapshotted per job)
      -> Transcriber::transcribe         // captured 16 kHz audio, no GGUF padding
         -> hex_phonon_transcribe -> PhononCoreML.Transcriber -> canonical JSON
@@ -109,10 +110,16 @@ checks both behaviours on real inference.
 
 ## Lifecycle
 
-- Preparation compiles the `.mlpackage` once into `<bundle>/Phonon-2.mlmodelc`
-  (a stable path inside Hex's models directory, deleted with the model), then
-  loads every encoder function and prewarms. First preparation on a Mac compiles
-  the Neural Engine programs and takes noticeably longer than later loads.
+- Preparation (`Transcriber::prepare_selection`, used by Settings, the menu bar,
+  the local API and `install-transcription-model`) compiles the `.mlpackage` once
+  into `<bundle>/Phonon-2.mlmodelc` (a stable path inside Hex's models
+  directory, deleted with the model), loads every encoder function once and
+  prewarms, then releases that session. The first load of each function on a
+  Mac compiles it for the Neural Engine; doing it here keeps that out of the
+  first dictation of each length.
+- The warm dictation session uses the package's lazy default: its 15 s
+  function is resident and the others load on first use, reusing the
+  system's compiled programs. This keeps resident memory lower (see below).
 - `WarmTranscriber::activate` loads the candidate before replacing the active
   model; a failed or cancelled preparation leaves the previous model and saved
   selection untouched.
@@ -194,12 +201,14 @@ CPU path; timings are not representative of a physical Mac.
   | Peak RSS | 5.6 GB | 1.25 GB |
 
   An earlier run of the same job measured 17.4x and 8.1x: VM timings vary.
-- Memory: loading every function eagerly added about 3.2 GB of resident memory
-  on this CPU path, against about 1.3 GB for the package's lazy default, whose
-  first 8 s dictation then took 9 s instead of 0.5 s. Hex keeps eager loading
-  (`EAGER_ALL_FUNCTIONS`) so no dictation pays a function load; whether the
-  Neural Engine path on a real Mac needs this memory is the first thing to
-  measure there.
+- Memory and first calls: on this CPU path, keeping every function resident
+  added about 3.2 GB against about 1.3-1.6 GB for the lazy default, but only
+  saved about 1 s on the first call of each length: first calls after a load
+  took 6-17 s either way, against about 0.6 s warm. Prewarming every function
+  at load time tripled load time without helping. Hex therefore prepares all
+  functions once and keeps the warm session lazy. On a real Mac the questions
+  are resident memory on the Neural Engine path and how slow the first call
+  of each length is after preparation.
 
 ## Known limitations
 

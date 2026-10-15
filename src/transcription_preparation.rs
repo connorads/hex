@@ -196,7 +196,7 @@ fn prepare_selection(
             }
         }
         check_canceled()?;
-        crate::transcription::Transcriber::load_selection(selection).map(drop)?;
+        crate::transcription::Transcriber::prepare_selection(selection)?;
         check_canceled()
     })()
     .map_err(|error| error.to_string())

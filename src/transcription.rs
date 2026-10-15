@@ -61,6 +61,17 @@ impl Transcriber {
         }
     }
 
+    /// Prepares `selection` ahead of dictation and releases it: checks that
+    /// it loads, and for Phonon compiles every encoder function once so the
+    /// warm session's lazy loads stay fast.
+    pub fn prepare_selection(selection: &TranscriptionSelection) -> Result<()> {
+        match validate(selection)?.runtime {
+            #[cfg(target_arch = "aarch64")]
+            ModelRuntime::PhononCoreMl(_) => Phonon::prepare(selection),
+            _ => Self::load_selection(selection).map(drop),
+        }
+    }
+
     pub fn matches_selection(&self, selection: &TranscriptionSelection) -> bool {
         match self {
             Self::Gguf(model) => model.matches_selection(selection),
