@@ -1681,6 +1681,106 @@ mod tests {
         }
     }
 
+    /// Phonon through the real dictation worker: queueing, the per-job
+    /// selection snapshot, ordered output, and cancellation after inference
+    /// has started. Needs `HEX_APPLICATION_SUPPORT_DIR` with Phonon installed
+    /// and `HEX_PHONON_FIXTURES`; uses the service target, so nothing pastes.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    #[ignore = "requires Apple silicon and an installed Phonon bundle"]
+    fn phonon_dictation_jobs_complete_in_order_and_cancelled_jobs_never_output() {
+        use std::time::Duration;
+
+        let fixtures = PathBuf::from(std::env::var_os("HEX_PHONON_FIXTURES").unwrap());
+        let read = |id: &str| {
+            WavReader::open(fixtures.join(format!("{id}.wav")))
+                .unwrap()
+                .samples::<i16>()
+                .map(|sample| f32::from(sample.unwrap()) / 32_768.0)
+                .collect::<Vec<_>>()
+        };
+        let short = read("1089-134686-0002");
+        let long = read("long-120s");
+        crate::app_settings::set_transcription_selection(&TranscriptionSelection {
+            model: TranscriptionModelId::Phonon2CoreMlEnglish,
+            ..TranscriptionSelection::default()
+        });
+        let worker = DictationWorker::start(
+            InputActivity::default(),
+            Arc::new(crate::personal_commands::TransformationClient::default()),
+            None,
+        );
+        let mut events = Vec::new();
+        let wait = |events: &mut Vec<WorkerEvent>, done: &dyn Fn(&WorkerEvent) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(600);
+            loop {
+                while let Some(event) = worker.try_recv() {
+                    let finished = done(&event);
+                    events.push(event);
+                    if finished {
+                        return;
+                    }
+                }
+                assert!(Instant::now() < deadline, "worker did not finish");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let submit = |samples: &[f32]| {
+            worker
+                .transcribe(
+                    DictationClip::from_transcription_samples(samples.to_vec()),
+                    TranscriptionTarget::Service,
+                    None,
+                    ContextSnapshot::default(),
+                )
+                .unwrap()
+        };
+
+        // An ordinary job completes with the exact reference transcript.
+        let first = submit(&short);
+        wait(
+            &mut events,
+            &|event| matches!(event, WorkerEvent::Completed { job_id, .. } if *job_id == first),
+        );
+        let Some(WorkerEvent::Completed { result, .. }) = events.last() else {
+            unreachable!()
+        };
+        assert_eq!(
+            result.as_deref(),
+            Ok(
+                "After early nightfall the yellow lamps would light up here and there the \
+                squalid quarter of the brothels."
+            )
+        );
+
+        // Cancel a long job once inference has started: the result is dropped.
+        let cancelled = submit(&long);
+        wait(
+            &mut events,
+            &|event| matches!(event, WorkerEvent::Stage { job_id, stage: DictationJobStage::Transcribing } if *job_id == cancelled),
+        );
+        assert_eq!(worker.cancel_latest(), Some(cancelled));
+        // A later job still completes, after the cancelled one, in order.
+        let after = submit(&short);
+        wait(
+            &mut events,
+            &|event| matches!(event, WorkerEvent::Completed { job_id, .. } if *job_id == after),
+        );
+        let outcomes = events
+            .iter()
+            .filter_map(|event| match event {
+                WorkerEvent::Completed { job_id, result, .. } => Some((*job_id, result.is_ok())),
+                WorkerEvent::Cancelled { job_id } => Some((*job_id, false)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes, [(first, true), (cancelled, false), (after, true)]);
+        assert!(events.iter().all(
+            |event| !matches!(event, WorkerEvent::Completed { job_id, .. } if *job_id == cancelled)
+        ));
+        assert!(!worker.is_busy());
+    }
+
     #[test]
     #[ignore = "requires VOICE_CONTROL_STUTTER_FIXTURE and the installed Parakeet model"]
     fn tdt_decoder_does_not_repeat_single_letter_tokens() {

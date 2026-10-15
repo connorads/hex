@@ -930,7 +930,7 @@ pub fn microphone_selection() -> (u64, Option<String>) {
     (state.revision, state.device.clone())
 }
 
-fn set_transcription_selection(selection: &TranscriptionSelection) {
+pub(crate) fn set_transcription_selection(selection: &TranscriptionSelection) {
     let state = TRANSCRIPTION_SELECTION.get_or_init(Default::default);
     let mut state = state.write().unwrap_or_else(|error| error.into_inner());
     if state.selection != *selection {
