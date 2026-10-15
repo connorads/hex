@@ -49,6 +49,7 @@ mod feedback;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gguf_session;
 #[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod history;
 mod instance;
 #[cfg(target_os = "macos")]
