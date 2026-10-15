@@ -25,7 +25,7 @@ pub enum Backend {
 }
 
 enum LoadedBackend {
-    TranscribeCpp(Parakeet),
+    TranscribeCpp(Box<Parakeet>),
     Selection(Box<crate::transcription::Transcriber>, String),
     #[cfg(feature = "onnx-benchmark")]
     Onnx(transcribe_rs::onnx::parakeet::ParakeetModel),
@@ -35,9 +35,9 @@ impl LoadedBackend {
     fn load(backend: Backend) -> Result<Self> {
         match backend {
             Backend::Onnx => load_onnx(),
-            Backend::TranscribeCpp { model } => {
-                Ok(Self::TranscribeCpp(Parakeet::load_for_benchmark(&model)?))
-            }
+            Backend::TranscribeCpp { model } => Ok(Self::TranscribeCpp(Box::new(
+                Parakeet::load_for_benchmark(&model)?,
+            ))),
             Backend::Selection { selection } => Ok(Self::Selection(
                 Box::new(crate::transcription::Transcriber::load_selection(
                     &selection,

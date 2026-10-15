@@ -72,8 +72,9 @@ jobs:
             echo "the binary links a build-local or Phonon dynamic library" >&2
             exit 1
           fi
-          nm "$binary" | grep -q ' T _hex_phonon_transcribe'
-          nm "$binary" | grep -q ' T _phonon2_tdt_decode_timed'
+          # Not grep -q: closing the pipe early fails nm under pipefail.
+          nm "$binary" | grep ' T _hex_phonon_transcribe$' > /dev/null
+          nm "$binary" | grep ' T _phonon2_tdt_decode_timed$' > /dev/null
       - name: Prepare speech fixtures
         run: python3 scripts/phonon-fixtures.py "$HEX_PHONON_FIXTURES"
       - name: Install Phonon through Hex (download, verify, compile, prewarm)
