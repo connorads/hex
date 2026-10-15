@@ -152,6 +152,12 @@ by the `Check macOS Phonon` workflow on a hosted arm64 VM without a Neural Engin
 They do not cover the physical hotkey -> paste path, Neural Engine timings or a
 signed app; those still need a real Mac.
 
+**Observed October 15, 2026:** `Check macOS Phonon` passed on a hosted arm64 VM
+(CPU Core ML, no Neural Engine): exact LibriSpeech references, 0 WER on 60/120 s
+speech, the native 35 s defect reproduced and avoided, worker cancellation with
+no late output, activation rollback and removal. Details and same-fixture numbers
+are in [docs/phonon-coreml.md](../phonon-coreml.md).
+
 Checks start in [onboarding.rs](../../src/onboarding.rs),
 [transcription.rs](../../src/transcription.rs), and
 [transcription_models.rs](../../src/transcription_models.rs). Setup/picker previews

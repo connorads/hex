@@ -160,6 +160,44 @@ concatenations of the LibriSpeech clips. Nothing is committed.
 the encoder on the CPU/GPU there: texts are meaningful, timings are not
 representative of a real Mac.
 
+## Observed on a hosted runner (15 October 2026)
+
+`Check macOS Phonon` run 38660457347 on GitHub's `macos-26` arm64 runner (Apple M1
+virtual machine, 7 GB, macOS 26.6.2, Xcode 26.6, no Neural Engine). Real Core ML,
+CPU path; timings are not representative of a physical Mac.
+
+- Build, static linkage audit (no Phonon or build-local dynamic libraries; only
+  system frameworks and `/usr/lib/swift`), Hex install, 9 real-inference tests,
+  511 unit tests and strict Clippy all passed.
+- Install through Hex: 9.8 s download and verify; first load (Core ML compile plus
+  all functions plus prewarm) 313 s on this VM; a later process loads in 5.5 s.
+  On disk: 646 MB (345 MB bundle plus 317 MB compiled model).
+- Exact reference text for the three LibriSpeech clips; 0 word errors on 60 s and
+  120 s natural speech with and without pauses (5-11 windows), and no lost or
+  duplicated words at seams. One cosmetic seam effect: a window can start with a
+  capital letter mid-sentence ("office, His place").
+- The 35 s defect reproduces natively: with the package default, 559,680, 559,840
+  and 560,000 samples fail with "window of … s exceeds the largest encoder
+  function"; 560,001 succeeds. With Hex's limit all five lengths transcribe all
+  99 words.
+- Same fixtures (6 clips, 223 s, rewriting off) through Hex's `Transcriber`:
+
+  | | Phonon-2 Core ML | Parakeet Unified English (default) |
+  | --- | --- | --- |
+  | Load | 5.0 s | 1.6 s |
+  | Median corpus pass | 19.1 s (11.7x realtime) | 45.9 s (4.9x realtime) |
+  | Median / p95 clip | 1.9 s / 10.6 s | 2.8 s / 26.0 s |
+  | WER | 0 / 617 words | 0 / 617 words |
+  | Peak RSS | 5.6 GB | 1.25 GB |
+
+  An earlier run of the same job measured 17.4x and 8.1x: VM timings vary.
+- Memory: loading every function eagerly added about 3.2 GB of resident memory
+  on this CPU path, against about 1.3 GB for the package's lazy default, whose
+  first 8 s dictation then took 9 s instead of 0.5 s. Hex keeps eager loading
+  (`EAGER_ALL_FUNCTIONS`) so no dictation pays a function load; whether the
+  Neural Engine path on a real Mac needs this memory is the first thing to
+  measure there.
+
 ## Known limitations
 
 - English only; no language detection, translation, recognition hints or
