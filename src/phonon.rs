@@ -19,6 +19,7 @@ unsafe extern "C" {
     fn hex_phonon_create(
         directory: *const c_char,
         single_shot_max_samples: isize,
+        eager_all_functions: i32,
         report: *mut *mut c_char,
         error: *mut *mut c_char,
     ) -> *mut c_void;
@@ -42,6 +43,26 @@ pub struct PhononTranscript {
     pub words: Vec<TranscriptSegment>,
 }
 
+/// How a session prepares the package. Hex uses the defaults; tests vary them.
+#[derive(Clone, Copy, Debug)]
+pub struct LoadOptions {
+    /// Overrides Hex's one-window limit (tests reproduce the upstream default).
+    pub single_shot_max_samples: Option<usize>,
+    /// Load every encoder function during preparation instead of on first use.
+    pub eager_all_functions: bool,
+}
+
+impl Default for LoadOptions {
+    fn default() -> Self {
+        Self {
+            single_shot_max_samples: None,
+            eager_all_functions: EAGER_ALL_FUNCTIONS,
+        }
+    }
+}
+
+const EAGER_ALL_FUNCTIONS: bool = true;
+
 pub struct Phonon {
     session: NonNull<c_void>,
     selection: Option<TranscriptionSelection>,
@@ -63,25 +84,31 @@ impl Phonon {
                 definition.name
             );
         }
-        let mut phonon = Self::load_from(&model_path(definition)?, None)?;
+        let mut phonon = Self::load_from(&model_path(definition)?, LoadOptions::default())?;
         phonon.selection = Some(selection.clone());
         Ok(phonon)
     }
 
-    /// Loads a bundle directory directly. `single_shot_max_samples` overrides
-    /// Hex's one-window limit; tests use it to reproduce the upstream default.
-    pub fn load_from(directory: &Path, single_shot_max_samples: Option<usize>) -> Result<Self> {
+    /// Loads a bundle directory directly.
+    pub fn load_from(directory: &Path, options: LoadOptions) -> Result<Self> {
         let directory = CString::new(directory.as_os_str().as_encoded_bytes())
             .wrap_err("Phonon model path contains a NUL byte")?;
-        let limit = match single_shot_max_samples {
+        let limit = match options.single_shot_max_samples {
             Some(limit) => isize::try_from(limit).wrap_err("Phonon window limit is too large")?,
             None => unsafe { hex_phonon_default_single_shot_max_samples() },
         };
         let started = Instant::now();
         let mut report = ptr::null_mut();
         let mut error = ptr::null_mut();
-        let session =
-            unsafe { hex_phonon_create(directory.as_ptr(), limit, &mut report, &mut error) };
+        let session = unsafe {
+            hex_phonon_create(
+                directory.as_ptr(),
+                limit,
+                i32::from(options.eager_all_functions),
+                &mut report,
+                &mut error,
+            )
+        };
         let report = take_string(report);
         let Some(session) = NonNull::new(session) else {
             return Err(eyre!(
@@ -323,7 +350,20 @@ mod native {
     }
 
     fn load() -> Phonon {
-        Phonon::load_from(&bundle(), None).unwrap()
+        Phonon::load_from(&bundle(), LoadOptions::default()).unwrap()
+    }
+
+    /// This process's current resident set size, in megabytes.
+    fn resident_mb() -> f64 {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<f64>()
+            .unwrap()
+            / 1_024.0
     }
 
     fn read_wav(path: &Path) -> Vec<f32> {
@@ -422,8 +462,14 @@ mod native {
     #[test]
     #[ignore = "requires Apple silicon, HEX_PHONON_BUNDLE and HEX_PHONON_FIXTURES"]
     fn upstream_35_second_limit_fails_and_hex_limit_covers_every_sample() {
-        let mut upstream =
-            Phonon::load_from(&bundle(), Some(UPSTREAM_SINGLE_SHOT_MAX_SAMPLES)).unwrap();
+        let mut upstream = Phonon::load_from(
+            &bundle(),
+            LoadOptions {
+                single_shot_max_samples: Some(UPSTREAM_SINGLE_SHOT_MAX_SAMPLES),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
         let mut hex = load();
         let mut upstream_failures = Vec::new();
         for samples in [559_520, 559_680, 559_840, 560_000, 560_001] {
@@ -546,6 +592,44 @@ mod native {
         // The session stays usable after rejected input.
         let (_, samples, expected) = clips().remove(0);
         assert_eq!(phonon.transcribe(&samples).unwrap().text, expected);
+    }
+
+    /// Lazy versus eager encoder functions: resident memory and the first
+    /// call that needs each bucket. Lazy runs first because freed memory is
+    /// not always returned to the system.
+    #[test]
+    #[ignore = "requires Apple silicon, HEX_PHONON_BUNDLE and HEX_PHONON_FIXTURES"]
+    fn function_loading_memory_and_first_bucket_latency() {
+        let buckets = [3, 8, 13, 30].map(|seconds| exactly(seconds * SAMPLE_RATE));
+        for eager_all_functions in [false, true] {
+            let before_mb = resident_mb();
+            let started = Instant::now();
+            let mut phonon = Phonon::load_from(
+                &bundle(),
+                LoadOptions {
+                    eager_all_functions,
+                    ..LoadOptions::default()
+                },
+            )
+            .unwrap();
+            let load_ms = started.elapsed().as_millis();
+            let loaded_mb = resident_mb();
+            let first_ms = buckets
+                .iter()
+                .map(|samples| {
+                    let started = Instant::now();
+                    assert!(!phonon.transcribe(samples).unwrap().words.is_empty());
+                    started.elapsed().as_millis()
+                })
+                .collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::json!({"eager_all_functions": eager_all_functions, "load_ms": load_ms,
+                    "rss_before_mb": before_mb, "rss_loaded_mb": loaded_mb,
+                    "rss_after_all_buckets_mb": resident_mb(),
+                    "first_call_ms_3_8_13_30_s": first_ms})
+            );
+        }
     }
 
     #[test]

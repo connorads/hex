@@ -36,6 +36,10 @@ jobs:
   phonon:
     runs-on: macos-26
     timeout-minutes: 150
+    defaults:
+      run:
+        # Explicit bash runs with -eo pipefail, so piping through tee keeps failures.
+        shell: bash
     env:
       MACOSX_DEPLOYMENT_TARGET: "15.0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
@@ -103,11 +107,21 @@ jobs:
           target/release/voice-control benchmark-transcription "$HEX_PHONON_FIXTURES/manifest.json" \
             --backend selection --model-id parakeet_unified_en --warmups 1 --runs 5 \
             | tee "$RESULTS/benchmark-default.ndjson"
+      - uses: oven-sh/setup-bun@v2
+        if: always()
+      - name: Build the personal-commands SDK used by unit tests
+        if: always()
+        run: |
+          (cd sdk && bun install --frozen-lockfile)
+          bun run --cwd sdk/commands build
       - name: Unit tests
         if: always()
         run: |
           set -o pipefail
           cargo test --locked --release --bin voice-control 2>&1 | tee "$RESULTS/unit-tests.txt" | tail -40
+      - name: Clippy
+        if: always()
+        run: cargo clippy --locked --release --bin voice-control --tests -- -D warnings 2>&1 | tail -60
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -32,6 +32,7 @@ private struct BridgeLoadReport: Codable {
     let functionLoadSeconds: [String: Double]
     let prewarmSeconds: Double
     let singleShotMaxSamples: Int
+    let eagerFunctions: [Double]
 }
 
 /// Hex keeps one window up to this many samples. PhononCoreML 1.1.2 plans a
@@ -51,7 +52,7 @@ private final class PhononSession {
     let report: BridgeLoadReport
     let lock = NSLock()
 
-    init(bundle: URL, singleShotMaxSamples: Int) throws {
+    init(bundle: URL, singleShotMaxSamples: Int, eagerAllFunctions: Bool) throws {
         let manifest = try JSONDecoder().decode(
             Manifest.self,
             from: Data(contentsOf: bundle.appendingPathComponent("manifest.json"))
@@ -59,9 +60,11 @@ private final class PhononSession {
         try PhononSession.compileBesideBundle(bundle: bundle, manifest: manifest)
         var options = Transcriber.Options()
         options.singleShotMaxSeconds = Double(singleShotMaxSamples) / 16_000
-        // Prepare every encoder function now, during model preparation, so the
-        // first dictation of each length never pays the Neural Engine compile.
-        options.eagerFunctions = manifest.functions_s
+        // Optionally prepare every encoder function now, during model
+        // preparation, so the first dictation of each length never pays the
+        // Neural Engine compile. Otherwise the package loads its 15 s function
+        // eagerly and the others on first use.
+        if eagerAllFunctions { options.eagerFunctions = manifest.functions_s }
         let transcriber = try Transcriber(bundle: bundle, options: options)
         let prewarmStarted = Date()
         _ = try transcriber.transcribe(PhononSession.prewarmSignal())
@@ -74,7 +77,8 @@ private final class PhononSession {
                 uniqueKeysWithValues: transcriber.functionLoadSeconds.map { ("\($0.key)", $0.value) }
             ),
             prewarmSeconds: Date().timeIntervalSince(prewarmStarted),
-            singleShotMaxSamples: singleShotMaxSamples
+            singleShotMaxSamples: singleShotMaxSamples,
+            eagerFunctions: transcriber.loadedFunctions.map(Double.init)
         )
     }
 
@@ -154,6 +158,7 @@ private func encode<T: Encodable>(_ value: T) throws -> UnsafeMutablePointer<CCh
 public func hexPhononCreate(
     _ directory: UnsafePointer<CChar>?,
     _ singleShotMaxSamples: Int,
+    _ eagerAllFunctions: Int32,
     _ report: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
     _ error: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
 ) -> UnsafeMutableRawPointer? {
@@ -169,7 +174,8 @@ public func hexPhononCreate(
         let session = try autoreleasepool {
             try PhononSession(
                 bundle: URL(fileURLWithPath: String(cString: directory), isDirectory: true),
-                singleShotMaxSamples: singleShotMaxSamples
+                singleShotMaxSamples: singleShotMaxSamples,
+                eagerAllFunctions: eagerAllFunctions != 0
             )
         }
         report?.pointee = try? encode(session.report)
