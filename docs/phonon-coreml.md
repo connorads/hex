@@ -172,16 +172,18 @@ representative of a real Mac.
 
 ## Observed on a hosted runner (15 October 2026)
 
-`Check macOS Phonon` run 38660457347 on GitHub's `macos-26` arm64 runner (Apple M1
+`Check macOS Phonon` run 38745353468 on GitHub's `macos-26` arm64 runner (Apple M1
 virtual machine, 7 GB, macOS 26.6.2, Xcode 26.6, no Neural Engine). Real Core ML,
-CPU path; timings are not representative of a physical Mac.
+CPU path; timings are not representative of a physical Mac. Earlier runs of the
+same job are consistent with these results unless noted.
 
 - Build, static linkage audit (no Phonon or build-local dynamic libraries; only
-  system frameworks and `/usr/lib/swift`), Hex install, 9 real-inference tests,
-  511 unit tests and strict Clippy all passed.
-- Install through Hex: 9.8 s download and verify; first load (Core ML compile plus
-  all functions plus prewarm) 313 s on this VM; a later process loads in 5.5 s.
-  On disk: 646 MB (345 MB bundle plus 317 MB compiled model).
+  system frameworks and `/usr/lib/swift`), Hex install, 10 real-inference tests,
+  510 unit tests and strict Clippy all passed.
+- Install through Hex: 12 s download and verify; first preparation (Core ML
+  compile, every function loaded once, prewarm) about 8 minutes on this VM; a
+  later preparation takes about 5 s. On disk: 646 MB (345 MB bundle plus 317 MB
+  compiled model).
 - Exact reference text for the three LibriSpeech clips; 0 word errors on 60 s and
   120 s natural speech with and without pauses (5-11 windows), and no lost or
   duplicated words at seams. One cosmetic seam effect: a window can start with a
@@ -190,33 +192,40 @@ CPU path; timings are not representative of a physical Mac.
   and 560,000 samples fail with "window of … s exceeds the largest encoder
   function"; 560,001 succeeds. With Hex's limit all five lengths transcribe all
   99 words.
+- Voice-delimited dictation on `say` speech: the strip of Phonon's full
+  transcript gives "I don't understand this.", "Is this working?", "Ship it",
+  "Meet me at five". The dictation worker completes jobs in order and a job
+  cancelled during inference produces no output.
+- Local API: three fresh `voice-control service` processes each prepared Phonon
+  over HTTP and returned the JFK reference text exactly.
 - Same fixtures (6 clips, 223 s, rewriting off) through Hex's `Transcriber`:
 
   | | Phonon-2 Core ML | Parakeet Unified English (default) |
   | --- | --- | --- |
-  | Load | 5.0 s | 1.6 s |
-  | Median corpus pass | 19.1 s (11.7x realtime) | 45.9 s (4.9x realtime) |
-  | Median / p95 clip | 1.9 s / 10.6 s | 2.8 s / 26.0 s |
+  | Load (warm session) | 3.2 s | 1.5 s |
+  | Median corpus pass | 16.7 s (13.4x realtime) | 39.2 s (5.7x realtime) |
+  | p95 clip | 8.7 s | 23.8 s |
   | WER | 0 / 617 words | 0 / 617 words |
-  | Peak RSS | 5.6 GB | 1.25 GB |
+  | Peak RSS | 5.3 GB | 1.25 GB |
 
-  An earlier run of the same job measured 17.4x and 8.1x: VM timings vary.
-- Memory and first calls: on this CPU path, keeping every function resident
-  added about 3.2 GB against about 1.3-1.6 GB for the lazy default, but only
-  saved about 1 s on the first call of each length: first calls after a load
-  took 6-17 s either way, against about 0.6 s warm. Prewarming every function
-  at load time tripled load time without helping. Hex therefore prepares all
-  functions once and keeps the warm session lazy. On a real Mac the questions
-  are resident memory on the Neural Engine path and how slow the first call
-  of each length is after preparation.
-
+  Across runs Phonon measured 8.4-17.4x and Parakeet 4.9-8.1x: VM timings vary.
+- Memory and first calls: on this CPU path, a session with every function
+  resident used about 3.3 GB after loading against about 2.3 GB lazy, and the
+  first call of each length after a load took 0.5-18 s either way, against about
+  0.6 s warm. Prewarming every function at load time tripled load time without
+  helping, so Hex prepares all functions once and keeps the warm session lazy.
+  Peak RSS during long audio stayed about 5.3 GB with the lazy session too, so it
+  comes from Core ML's CPU execution and the long-audio pipeline rather than
+  from resident functions. On a real Mac the questions are resident memory on
+  the Neural Engine path and how slow the first call of each length is after
+  preparation.
 - The 6.6 s LibriSpeech clip, the only fixture that uses the 10 s encoder
   function, was consistently 2-10x slower per second of audio than longer clips
   on the 15 s function, in every run. Whether the smaller functions are slower
   on the Neural Engine too, or only on this CPU fallback, needs a real Mac.
-- The local API smoke test transcribes the JFK fixture. macOS `say` on the
-  runner occasionally wrote a near-empty file (5 ms of audio), for which Phonon
-  correctly returned no text; the scripts now reject such output.
+- macOS `say` on the runner occasionally wrote a near-empty file (5 ms of audio),
+  for which Phonon correctly returned no text; the scripts now reject such output
+  and the API smoke test uses the JFK fixture.
 
 ## Known limitations
 

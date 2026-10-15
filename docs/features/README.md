@@ -155,8 +155,9 @@ signed app; those still need a real Mac.
 
 **Observed October 15, 2026:** `Check macOS Phonon` passed on a hosted arm64 VM
 (CPU Core ML, no Neural Engine): exact LibriSpeech references, 0 WER on 60/120 s
-speech, the native 35 s defect reproduced and avoided, worker cancellation with
-no late output, activation rollback and removal. Details and same-fixture numbers
+speech, the native 35 s defect reproduced and avoided, voice-delimited control
+phrases stripped, worker cancellation with no late output, activation rollback
+and removal, and local API prepare plus transcription. Details and same-fixture numbers
 are in [docs/phonon-coreml.md](../phonon-coreml.md).
 
 Checks start in [onboarding.rs](../../src/onboarding.rs),
