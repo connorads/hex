@@ -66,14 +66,8 @@ private final class PhononSession {
         // eagerly and the others on first use.
         if eagerAllFunctions { options.eagerFunctions = manifest.functions_s }
         let transcriber = try Transcriber(bundle: bundle, options: options)
-        // The first prediction of each encoder function is far slower than
-        // later ones, so run one per loaded function now rather than in the
-        // first dictation of that length. Each signal fits only its function.
         let prewarmStarted = Date()
-        for seconds in transcriber.loadedFunctions {
-            let samples = min(Int((Double(seconds) - 0.5) * 16_000), singleShotMaxSamples)
-            _ = try transcriber.transcribe(PhononSession.prewarmSignal(samples: samples))
-        }
+        _ = try transcriber.transcribe(PhononSession.prewarmSignal(samples: 16_000))
         transcriber.resetTiming()
         self.transcriber = transcriber
         report = BridgeLoadReport(

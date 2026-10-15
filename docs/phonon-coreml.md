@@ -33,8 +33,11 @@ Settings / menu bar / local API -> select phonon_2_coreml_en
   PhononCoreML sources, so no separate Swift package or dynamic library ships.
 - `src/phonon.rs`: the Rust owner. One session per `Phonon`, `&mut self` for
   inference, released on drop. Non-finite samples are rejected before the bridge.
-  Voice-delimited dictation retranscribes the audio before a trailing control
-  phrase using Phonon's word timings, like the GGUF path.
+  Voice-delimited dictation keeps Phonon's full transcript and lets the worker
+  strip the trailing control phrase as text. Unlike the GGUF path it does not
+  cut the audio at the phrase's word timing and retranscribe: on real Phonon
+  output that cut kept the onset of "say" and produced an extra word
+  ("I don't understand this, you").
 - `build.rs`: on `aarch64-apple-darwin` only, fetches the pinned commit (or uses
   `HEX_PHONON_COREML_SOURCE`), checks the decoder library's SHA-256, compiles
   `src/phonon.swift` plus `Sources/PhononCoreML/*.swift` into one object, and

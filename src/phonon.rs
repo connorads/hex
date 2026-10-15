@@ -9,11 +9,8 @@ use std::time::Instant;
 use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use serde::Deserialize;
 
-use crate::dictation::DictationProtocol;
 use crate::transcription::{Transcript, TranscriptSegment};
 use crate::transcription_models::{TranscriptionSelection, model_path, validate};
-
-const SAMPLES_PER_MS: usize = 16;
 
 unsafe extern "C" {
     fn hex_phonon_create(
@@ -166,30 +163,6 @@ impl Phonon {
         self.transcribe(samples).map(|result| result.text)
     }
 
-    /// Voice-delimited dictation: when the transcript ends with a control
-    /// phrase, retranscribe only the audio before that phrase so control
-    /// words cannot bleed into the dictated text.
-    pub fn transcribe_voice(
-        &mut self,
-        samples: &[f32],
-        protocol: &DictationProtocol,
-    ) -> Result<String> {
-        let transcript = self.transcribe(samples)?;
-        let words = transcript
-            .words
-            .iter()
-            .map(|word| word.text.clone())
-            .collect::<Vec<_>>();
-        let Some(cut) = control_cut(&transcript.words, &words, protocol, samples.len()) else {
-            return Ok(transcript.text);
-        };
-        tracing::debug!(
-            control_start_ms = cut / SAMPLES_PER_MS,
-            "retranscribing Phonon voice dictation without control audio"
-        );
-        self.transcribe_text(&samples[..cut])
-    }
-
     pub fn transcribe_segments(&mut self, samples: &[f32]) -> Result<Transcript> {
         self.transcribe(samples).map(|result| Transcript {
             text: result.text,
@@ -224,22 +197,6 @@ fn decode(json: &str) -> Result<PhononTranscript> {
     Ok(transcript)
 }
 
-/// The sample index where a trailing control phrase starts, when cutting
-/// there leaves dictated audio before it.
-fn control_cut(
-    spans: &[TranscriptSegment],
-    words: &[String],
-    protocol: &DictationProtocol,
-    samples: usize,
-) -> Option<usize> {
-    let control_words = protocol.control_suffix_word_count(words)?;
-    let control = spans.get(spans.len().checked_sub(control_words)?)?;
-    let cut = (control.start_ms.max(0) as usize)
-        .saturating_mul(SAMPLES_PER_MS)
-        .min(samples);
-    (cut > 0 && cut < samples).then_some(cut)
-}
-
 fn take_string(string: *mut c_char) -> Option<String> {
     if string.is_null() {
         return None;
@@ -254,14 +211,6 @@ fn take_string(string: *mut c_char) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn span(start_ms: i64, end_ms: i64, text: &str) -> TranscriptSegment {
-        TranscriptSegment {
-            start_ms,
-            end_ms,
-            text: text.into(),
-        }
-    }
 
     #[test]
     fn bridge_json_keeps_full_text_and_millisecond_word_timings() {
@@ -296,37 +245,6 @@ mod tests {
             let error = validate_samples(&[0.0, bad]).unwrap_err().to_string();
             assert!(error.contains("index 1"), "{error}");
         }
-    }
-
-    #[test]
-    fn control_phrases_cut_at_their_first_word() {
-        let protocol = DictationProtocol::try_new(
-            vec!["say".into()],
-            vec!["say stop".into()],
-            vec!["say send".into()],
-            vec!["never mind".into()],
-        )
-        .unwrap();
-        let phrase = "say stop";
-        let mut spans = vec![span(0, 400, "hello"), span(500, 900, "there")];
-        let mut start = 1_000;
-        for word in phrase.split_whitespace() {
-            spans.push(span(start, start + 300, word));
-            start += 400;
-        }
-        let words = spans
-            .iter()
-            .map(|span| span.text.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(control_cut(&spans, &words, &protocol, 64_000), Some(16_000));
-        // Plain dictation and control-only speech keep the whole clip.
-        let plain = &spans[..2];
-        let plain_words = &words[..2];
-        assert_eq!(control_cut(plain, plain_words, &protocol, 64_000), None);
-        let only = &spans[2..];
-        let mut shifted = only.to_vec();
-        shifted[0].start_ms = 0;
-        assert_eq!(control_cut(&shifted, &words[2..], &protocol, 64_000), None);
     }
 }
 
@@ -603,13 +521,13 @@ mod native {
         assert_eq!(phonon.transcribe(&samples).unwrap().text, expected);
     }
 
-    /// Voice-delimited dictation on `say` speech: the control phrase is cut
-    /// at its word timing, retranscribed without it, and stripped. Synthetic
+    /// Voice-delimited dictation on `say` speech: the full transcript ends
+    /// with the control phrase, which the worker strips as text. Synthetic
     /// speech checks control handling, not recognition accuracy.
     #[test]
     #[ignore = "requires Apple silicon, HEX_PHONON_BUNDLE and HEX_PHONON_FIXTURES"]
     fn voice_delimited_dictation_drops_control_phrases() {
-        let protocol = DictationProtocol::try_new(
+        let protocol = crate::dictation::DictationProtocol::try_new(
             vec!["say".into()],
             vec!["say paste".into(), "say stop".into()],
             vec!["say send".into()],
@@ -625,11 +543,10 @@ mod native {
         ] {
             let samples = read_wav(&fixtures().join(format!("protocol/{name}.wav")));
             let full = phonon.transcribe(&samples).unwrap();
-            let clipped = phonon.transcribe_voice(&samples, &protocol).unwrap();
-            let prepared = protocol.strip(&clipped);
+            let prepared = protocol.strip(&full.text);
             println!(
                 "{}",
-                serde_json::json!({"clip": name, "full": full.text, "clipped": clipped,
+                serde_json::json!({"clip": name, "full": full.text,
                     "prepared": prepared, "expected": expected})
             );
             assert!(

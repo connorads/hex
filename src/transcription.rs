@@ -99,11 +99,12 @@ impl Transcriber {
             }
             Self::AppleSpeech(model) => model.transcribe(&samples).map(|result| result.text),
             // Phonon receives the captured audio exactly: no GGUF padding.
+            // Its full transcript keeps a trailing control phrase as words,
+            // which the worker strips as text. Cutting the audio at the
+            // phrase's word timing and retranscribing (the GGUF approach)
+            // left the phrase's onset in the clip and produced an extra word.
             #[cfg(target_arch = "aarch64")]
-            Self::Phonon(model) => match protocol {
-                Some(protocol) => model.transcribe_voice(&samples, protocol),
-                None => model.transcribe_text(&samples),
-            },
+            Self::Phonon(model) => model.transcribe_text(&samples),
         }
     }
 
