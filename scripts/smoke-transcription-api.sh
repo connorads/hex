@@ -61,7 +61,12 @@ curl --fail --silent --show-error --no-buffer \
   -X POST \
   -H "Authorization: Bearer $token" \
   "http://127.0.0.1:$port/models/$model/prepare" > "$events"
-grep -Fq '"type":"ok"' "$events"
+if ! grep -Fq '"type":"ok"' "$events"; then
+  echo "Model preparation did not finish. Events:" >&2
+  tail -n 20 "$events" >&2
+  tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
+  exit 1
+fi
 
 /usr/bin/say "Hello from the local HEX transcription service." -o "$audio.aiff"
 /usr/bin/afconvert -f WAVE -d LEI16@16000 "$audio.aiff" "$audio"
