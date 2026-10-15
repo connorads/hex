@@ -2,10 +2,12 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-support="$HOME/Library/Application Support/voice-control"
+support="${HEX_APPLICATION_SUPPORT_DIR:-$HOME/Library/Application Support/voice-control}"
 discovery="$support/local-api.json"
 model=${HEX_SMOKE_MODEL:-parakeet_unified_en}
-audio="${TMPDIR:-/tmp}/hex-transcription-smoke.wav"
+generated="${TMPDIR:-/tmp}/hex-transcription-smoke.wav"
+audio=${HEX_SMOKE_AUDIO:-$generated}
+expect=${HEX_SMOKE_EXPECT:-}
 events="${TMPDIR:-/tmp}/hex-transcription-prepare.ndjson"
 service_pid=
 
@@ -28,7 +30,7 @@ cleanup() {
   if [ -n "$service_pid" ]; then
     wait "$service_pid" 2>/dev/null || true
   fi
-  rm -f "$audio" "$audio.aiff" "$events"
+  rm -f "$generated" "$generated.aiff" "$events"
 }
 trap cleanup EXIT INT TERM
 
@@ -37,8 +39,12 @@ if [ -e "$discovery" ]; then
   exit 1
 fi
 
-cargo build --manifest-path "$root/Cargo.toml"
-"$root/target/debug/voice-control" service >/dev/null 2>&1 &
+binary=${HEX_SMOKE_BINARY:-}
+if [ -z "$binary" ]; then
+  cargo build --manifest-path "$root/Cargo.toml"
+  binary="$root/target/debug/voice-control"
+fi
+"$binary" service >/dev/null 2>&1 &
 service_pid=$!
 
 attempts=100
@@ -57,11 +63,24 @@ curl --fail --silent --show-error --no-buffer \
   -X POST \
   -H "Authorization: Bearer $token" \
   "http://127.0.0.1:$port/models/$model/prepare" > "$events"
-grep -Fq '"type":"ok"' "$events"
+if ! grep -Fq '"type":"ok"' "$events"; then
+  echo "Model preparation did not finish. Events:" >&2
+  tail -n 20 "$events" >&2
+  tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
+  exit 1
+fi
 
-/usr/bin/say "Hello from the local HEX transcription service." -o "$audio.aiff"
-/usr/bin/afconvert -f WAVE -d LEI16@16000 "$audio.aiff" "$audio"
-rm -f "$audio.aiff"
+if [ -z "${HEX_SMOKE_AUDIO:-}" ]; then
+  /usr/bin/say "Hello from the local HEX transcription service." -o "$generated.aiff"
+  /usr/bin/afconvert -f WAVE -d LEI16@16000 "$generated.aiff" "$generated"
+  rm -f "$generated.aiff"
+  # say occasionally writes a near-empty file on headless machines; that is
+  # not a transcription result, so refuse it instead of reporting empty text.
+  if [ "$(wc -c < "$generated")" -lt 16000 ]; then
+    echo "say produced no usable speech; set HEX_SMOKE_AUDIO to a WAV file." >&2
+    exit 1
+  fi
+fi
 
 result=$(curl --fail --silent --show-error \
   -X POST \
@@ -69,5 +88,14 @@ result=$(curl --fail --silent --show-error \
   -H "Content-Type: audio/wav" \
   --data-binary "@$audio" \
   "http://127.0.0.1:$port/transcriptions?model=$model&language=en")
-printf '%s\n' "$result" | jq -e '.transcript | length > 0' >/dev/null
 printf '%s\n' "$result" | jq .
+if ! printf '%s\n' "$result" | jq -e '.transcript | length > 0' >/dev/null; then
+  echo "Transcription returned no text. Service log:" >&2
+  tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
+  exit 1
+fi
+if [ -n "$expect" ] && ! printf '%s\n' "$result" | jq -e --arg expect "$expect" \
+  '.transcript | ascii_downcase | contains($expect | ascii_downcase)' >/dev/null; then
+  echo "Transcription does not contain: $expect" >&2
+  exit 1
+fi

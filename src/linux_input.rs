@@ -11,6 +11,7 @@ use x11rb::protocol::ErrorKind;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{ConnectionExt, GrabMode, ModMask, Window};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 use crate::linux_session::LinuxSession;
 use crate::linux_settings::LinuxHotkey;
@@ -375,7 +376,10 @@ fn grab_variants(
             for modifiers in grabbed {
                 let _ = connection.ungrab_key(key, root, modifiers);
             }
-            let _ = connection.flush();
+            // Wait until the server has released the partial grabs: the X
+            // server orders requests per client, so a flush alone lets another
+            // client's grab of the same key race the release.
+            let _ = connection.sync();
             return Err(error);
         }
         grabbed.push(modifiers);

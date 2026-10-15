@@ -1,0 +1,146 @@
+name: Check macOS Phonon
+
+# Builds the arm64 app binary with the Phonon Core ML bridge, installs the
+# pinned model through Hex's own installer, and runs real Core ML inference.
+# Hosted runners are virtual machines without a Neural Engine, so Core ML runs
+# the encoder on the CPU/GPU here: texts are comparable, timings are not.
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "src/**"
+      - "scripts/phonon-fixtures.py"
+      - ".github/workflows/check-macos-phonon.yml"
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "src/**"
+      - "scripts/phonon-fixtures.py"
+      - ".github/workflows/check-macos-phonon.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-phonon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phonon:
+    runs-on: macos-26
+    timeout-minutes: 150
+    defaults:
+      run:
+        # Explicit bash runs with -eo pipefail, so piping through tee keeps failures.
+        shell: bash
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Environment
+        run: |
+          {
+            echo "HEX_APPLICATION_SUPPORT_DIR=$RUNNER_TEMP/hex-support"
+            echo "HEX_PHONON_FIXTURES=$RUNNER_TEMP/phonon-fixtures"
+            echo "HEX_PHONON_BUNDLE=$RUNNER_TEMP/hex-support/models/phonon-2-coreml-1143812f"
+            echo "RESULTS=$RUNNER_TEMP/results"
+          } >> "$GITHUB_ENV"
+          RESULTS=$RUNNER_TEMP/results
+          mkdir -p "$RESULTS"
+          { sw_vers; uname -m; sysctl -n machdep.cpu.brand_string; sysctl -n hw.memsize;
+            xcodebuild -version; swift --version; rustc --version; } | tee "$RESULTS/environment.txt"
+      - name: Build the arm64 release binary
+        run: cargo build --locked --release --bin voice-control 2>&1 | tail -20
+      - name: Audit native linkage
+        run: |
+          binary=target/release/voice-control
+          { lipo -info "$binary"; otool -L "$binary"; otool -l "$binary" | grep -A2 LC_RPATH;
+            nm "$binary" | grep -E ' T _(hex_phonon|phonon2_tdt)_' ; } | tee "$RESULTS/linkage.txt"
+          if otool -L "$binary" | grep -E '\.build/|/target/|phonon' ; then
+            echo "the binary links a build-local or Phonon dynamic library" >&2
+            exit 1
+          fi
+          # Not grep -q: closing the pipe early fails nm under pipefail.
+          nm "$binary" | grep ' T _hex_phonon_transcribe$' > /dev/null
+          nm "$binary" | grep ' T _phonon2_tdt_decode_timed$' > /dev/null
+      - name: Prepare speech fixtures
+        run: python3 scripts/phonon-fixtures.py "$HEX_PHONON_FIXTURES"
+      - name: Install Phonon through Hex (download, verify, compile, prewarm)
+        run: |
+          target/release/voice-control install-transcription-model phonon_2_coreml_en \
+            | tee "$RESULTS/install-first.json"
+          # A second run is a receipt check plus a cached load: no download.
+          target/release/voice-control install-transcription-model phonon_2_coreml_en \
+            | tee "$RESULTS/install-cached.json"
+          du -sh "$HEX_PHONON_BUNDLE" "$HEX_PHONON_BUNDLE/Phonon-2.mlmodelc" | tee -a "$RESULTS/install-cached.json"
+      - name: Local API smoke test (prepare over HTTP, then transcribe) with Phonon
+        if: always()
+        run: |
+          # Three fresh service processes: preparation and transcription must be repeatable.
+          for attempt in 1 2 3; do
+            HEX_SMOKE_MODEL=phonon_2_coreml_en HEX_SMOKE_BINARY=target/release/voice-control \
+              HEX_SMOKE_AUDIO="$HEX_PHONON_FIXTURES/jfk.wav" HEX_SMOKE_EXPECT="fellow Americans" \
+              scripts/smoke-transcription-api.sh | tee -a "$RESULTS/local-api-phonon.json"
+          done
+      - name: Real Core ML inference tests
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --release --bin voice-control -- \
+            phonon::native transcription::tests::phonon parakeet::tests::phonon --ignored --nocapture --test-threads=1 \
+            2>&1 | tee "$RESULTS/native-tests.txt"
+      - name: Benchmark Phonon through Hex's dictation transcriber
+        if: always()
+        run: |
+          # The activation test removes the bundle; install it again.
+          target/release/voice-control install-transcription-model phonon_2_coreml_en
+          target/release/voice-control benchmark-transcription "$HEX_PHONON_FIXTURES/manifest.json" \
+            --backend selection --model-id phonon_2_coreml_en --warmups 1 --runs 5 \
+            | tee "$RESULTS/benchmark-phonon.ndjson"
+      - name: Capture the English model picker with Phonon listed
+        if: always()
+        continue-on-error: true
+        run: |
+          HEX_PREVIEW_BINARY=target/release/voice-control scripts/capture-preview.sh \
+            "$RESULTS/transcription-picker-en.png" transcription-picker --language en --model-state installed
+      - name: Benchmark the default model on the same fixtures
+        if: always()
+        continue-on-error: true
+        run: |
+          export HEX_APPLICATION_SUPPORT_DIR="$RUNNER_TEMP/hex-default"
+          target/release/voice-control install-transcription-model parakeet_unified_en
+          target/release/voice-control benchmark-transcription "$HEX_PHONON_FIXTURES/manifest.json" \
+            --backend selection --model-id parakeet_unified_en --warmups 1 --runs 5 \
+            | tee "$RESULTS/benchmark-default.ndjson"
+      - uses: oven-sh/setup-bun@v2
+        if: always()
+      - name: Build the personal-commands SDK used by unit tests
+        if: always()
+        run: |
+          (cd sdk && bun install --frozen-lockfile)
+          bun run --cwd sdk/commands build
+      - name: Unit tests
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --release --bin voice-control 2>&1 | tee "$RESULTS/unit-tests.txt" | tail -40
+      - name: Clippy
+        if: always()
+        run: cargo clippy --locked --release --bin voice-control --tests -- -D warnings 2>&1 | tail -60
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phonon-macos-results
+          path: ${{ runner.temp }}/results

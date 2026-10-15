@@ -49,6 +49,7 @@ mod feedback;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gguf_session;
 #[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod history;
 mod instance;
 #[cfg(target_os = "macos")]
@@ -89,6 +90,7 @@ mod meeting_detection;
 mod meeting_watcher;
 #[cfg(target_os = "macos")]
 mod microphone_activity;
+mod model_bundle;
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 mod moonshine;
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -103,6 +105,8 @@ mod paste;
 mod permission_guide;
 #[cfg(target_os = "macos")]
 mod personal_commands;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod phonon;
 #[cfg(target_os = "macos")]
 mod recognition;
 #[cfg(target_os = "macos")]
@@ -262,12 +266,22 @@ enum Command {
         /// Override the default GGUF model path for the transcribe.cpp backend.
         #[arg(long)]
         model: Option<PathBuf>,
+        /// Installed catalogue model for the selection backend, such as
+        /// `phonon_2_coreml_en`. Defaults to the default dictation model.
+        #[arg(long)]
+        model_id: Option<String>,
         /// Full-corpus passes discarded before measurement.
         #[arg(long, default_value_t = 1)]
         warmups: usize,
         /// Full-corpus measured passes.
         #[arg(long, default_value_t = 7)]
         runs: usize,
+    },
+    /// Download and verify one catalogue transcription model, then load it.
+    #[command(hide = true)]
+    InstallTranscriptionModel {
+        /// Catalogue model id, such as `phonon_2_coreml_en`.
+        model_id: String,
     },
     #[cfg(debug_assertions)]
     /// Record and evaluate command-recognition fixtures interactively.
@@ -289,6 +303,8 @@ enum Command {
 enum TranscriptionBenchmarkBackend {
     Onnx,
     TranscribeCpp,
+    /// The installed catalogue model through Hex's dictation `Transcriber`.
+    Selection,
 }
 
 #[cfg(target_os = "macos")]
@@ -645,14 +661,29 @@ fn main() -> Result<()> {
         Command::Meeting {
             command: MeetingCommand::Probe,
         } => meeting_watcher::probe(),
+        Command::InstallTranscriptionModel { model_id } => {
+            install_transcription_model(&model_id.parse()?)
+        }
         Command::BenchmarkTranscription {
             manifest,
             backend,
             model,
+            model_id,
             warmups,
             runs,
         } => {
             let backend = match backend {
+                TranscriptionBenchmarkBackend::Selection => {
+                    transcription_benchmark::Backend::Selection {
+                        selection: transcription_models::TranscriptionSelection {
+                            model: match model_id {
+                                Some(id) => id.parse()?,
+                                None => transcription_models::TranscriptionModelId::default(),
+                            },
+                            ..Default::default()
+                        },
+                    }
+                }
                 TranscriptionBenchmarkBackend::Onnx => transcription_benchmark::Backend::Onnx,
                 TranscriptionBenchmarkBackend::TranscribeCpp => {
                     transcription_benchmark::Backend::TranscribeCpp {
@@ -675,6 +706,35 @@ fn main() -> Result<()> {
             false => moonshine_lab::run(&root, &directory, device.as_deref()),
         },
     }
+}
+
+#[cfg(target_os = "macos")]
+fn install_transcription_model(id: &transcription_models::TranscriptionModelId) -> Result<()> {
+    let selection = transcription_models::TranscriptionSelection {
+        model: *id,
+        ..Default::default()
+    };
+    let model = transcription_models::validate(&selection)?;
+    let started = std::time::Instant::now();
+    let path = transcription_models::download_with_progress(
+        model,
+        &AtomicBool::new(false),
+        &std::sync::atomic::AtomicU64::new(0),
+    )?;
+    let downloaded = started.elapsed();
+    let started = std::time::Instant::now();
+    transcription::Transcriber::prepare_selection(&selection)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "model": id.as_str(),
+            "path": path,
+            "verified": transcription_models::is_verified(model),
+            "download_ms": downloaded.as_millis() as u64,
+            "first_load_ms": started.elapsed().as_millis() as u64,
+        })
+    );
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]

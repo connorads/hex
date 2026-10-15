@@ -14,11 +14,19 @@ use crate::parakeet::Parakeet;
 
 pub enum Backend {
     Onnx,
-    TranscribeCpp { model: PathBuf },
+    TranscribeCpp {
+        model: PathBuf,
+    },
+    /// The installed catalogue model through Hex's own `Transcriber`, with the
+    /// same backend-specific input preparation as dictation.
+    Selection {
+        selection: crate::transcription_models::TranscriptionSelection,
+    },
 }
 
 enum LoadedBackend {
-    TranscribeCpp(Parakeet),
+    TranscribeCpp(Box<Parakeet>),
+    Selection(Box<crate::transcription::Transcriber>, String),
     #[cfg(feature = "onnx-benchmark")]
     Onnx(transcribe_rs::onnx::parakeet::ParakeetModel),
 }
@@ -27,15 +35,22 @@ impl LoadedBackend {
     fn load(backend: Backend) -> Result<Self> {
         match backend {
             Backend::Onnx => load_onnx(),
-            Backend::TranscribeCpp { model } => {
-                Ok(Self::TranscribeCpp(Parakeet::load_for_benchmark(&model)?))
-            }
+            Backend::TranscribeCpp { model } => Ok(Self::TranscribeCpp(Box::new(
+                Parakeet::load_for_benchmark(&model)?,
+            ))),
+            Backend::Selection { selection } => Ok(Self::Selection(
+                Box::new(crate::transcription::Transcriber::load_selection(
+                    &selection,
+                )?),
+                format!("hex-{}", selection.model.as_str()),
+            )),
         }
     }
 
     fn name(&self) -> &str {
         match self {
             Self::TranscribeCpp(model) => model.name(),
+            Self::Selection(_, name) => name,
             #[cfg(feature = "onnx-benchmark")]
             Self::Onnx(_) => "transcribe-rs-onnx-int8",
         }
@@ -43,9 +58,17 @@ impl LoadedBackend {
 
     fn transcribe(&mut self, samples: &[f32]) -> Result<String> {
         match self {
-            Self::TranscribeCpp(model) => model.transcribe(samples),
+            Self::TranscribeCpp(model) => {
+                let mut samples = samples.to_vec();
+                pad_for_parakeet(&mut samples);
+                model.transcribe(&samples)
+            }
+            Self::Selection(model, _) => model.transcribe(samples.to_vec()),
             #[cfg(feature = "onnx-benchmark")]
             Self::Onnx(model) => {
+                let mut samples = samples.to_vec();
+                pad_for_parakeet(&mut samples);
+                let samples = samples.as_slice();
                 use transcribe_rs::onnx::parakeet::{ParakeetParams, TimestampGranularity};
 
                 model
@@ -258,6 +281,7 @@ pub fn run(manifest_path: &Path, warmups: usize, runs: usize, backend: Backend) 
             "word_errors": total_word_errors,
             "reference_words": total_reference_words,
             "wer": total_word_errors as f64 / total_reference_words as f64,
+            "peak_rss_bytes": peak_rss_bytes(),
         }),
     )?;
     output.flush()?;
@@ -324,13 +348,28 @@ fn load_clip(root: &Path, definition: ClipDefinition) -> Result<Clip> {
         .map(|frame| frame.iter().sum::<f32>() / channels as f32)
         .collect::<Vec<_>>();
     let audio_ms = mono.len() as f64 * 1_000.0 / f64::from(spec.sample_rate);
-    let mut samples = resample_for_parakeet(&mono, spec.sample_rate);
-    pad_for_parakeet(&mut samples);
+    // Backends apply their own input preparation; GGUF padding is not shared.
+    let samples = resample_for_parakeet(&mono, spec.sample_rate);
     Ok(Clip {
         id: definition.id,
         expected: definition.expected,
         samples,
         audio_ms,
+    })
+}
+
+/// The process's peak resident set size, including the loaded model.
+fn peak_rss_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let maximum = u64::try_from(unsafe { usage.assume_init() }.ru_maxrss).ok()?;
+    // macOS reports bytes; Linux reports kilobytes.
+    Some(if cfg!(target_os = "macos") {
+        maximum
+    } else {
+        maximum * 1_024
     })
 }
 
@@ -347,7 +386,7 @@ fn percentile(values: &[f64], percentile: f64) -> f64 {
     sorted[index]
 }
 
-fn word_errors(expected: &str, actual: &str) -> (usize, usize) {
+pub(crate) fn word_errors(expected: &str, actual: &str) -> (usize, usize) {
     let expected = normalized_words(expected);
     let actual = normalized_words(actual);
     let mut previous = (0..=actual.len()).collect::<Vec<_>>();
@@ -426,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn wav_preparation_downmixes_and_pads_without_changing_duration() {
+    fn wav_preparation_downmixes_without_backend_padding() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -463,8 +502,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(clip.audio_ms, 0.125);
-        assert_eq!(clip.samples.len(), 24_000);
-        assert_eq!(&clip.samples[..2], &[0.0, 0.5]);
+        assert_eq!(clip.samples, [0.0, 0.5]);
         fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -328,6 +328,12 @@ pub struct DictationClip {
 }
 
 impl DictationClip {
+    /// A captured clip of normalised 16 kHz samples, for worker tests.
+    #[cfg(test)]
+    pub fn from_transcription_samples(samples: Vec<f32>) -> Self {
+        Self { samples }
+    }
+
     pub fn duration_ms(&self) -> u64 {
         self.samples.len() as u64 * 1_000 / u64::from(PARAKEET_SAMPLE_RATE)
     }

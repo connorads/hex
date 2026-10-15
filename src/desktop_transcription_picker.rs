@@ -41,6 +41,8 @@ pub(crate) enum TranscriptionPickerStatus {
 
 /// Whether a downloaded model card offers deleting its files.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// Linux has no model deletion yet; only macOS offers and confirms it.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(crate) enum ModelDeletion {
     Unavailable,
     Offered,
