@@ -102,8 +102,11 @@ jobs:
       - name: Local API smoke test (prepare over HTTP, then transcribe) with Phonon
         if: always()
         run: |
-          HEX_SMOKE_MODEL=phonon_2_coreml_en HEX_SMOKE_BINARY=target/release/voice-control \
-            scripts/smoke-transcription-api.sh | tee "$RESULTS/local-api-phonon.json"
+          # Three fresh service processes: preparation and transcription must be repeatable.
+          for attempt in 1 2 3; do
+            HEX_SMOKE_MODEL=phonon_2_coreml_en HEX_SMOKE_BINARY=target/release/voice-control \
+              scripts/smoke-transcription-api.sh | tee -a "$RESULTS/local-api-phonon.json"
+          done
       - name: Capture the English model picker with Phonon listed
         if: always()
         continue-on-error: true

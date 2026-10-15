@@ -9,7 +9,7 @@ unchanged.
 ## Architecture
 
 ```ts
-Settings / menu bar / local API -> select phonon_2_coreml_en
+Settings / menu bar -> select phonon_2_coreml_en
   -> transcription_models: ModelRuntime::PhononCoreMl(bundle)
      -> model_bundle::install           // staged, per-file SHA-256, atomic publish
   -> transcription_preparation -> Transcriber::prepare_selection
@@ -110,13 +110,17 @@ checks both behaviours on real inference.
 
 ## Lifecycle
 
-- Preparation (`Transcriber::prepare_selection`, used by Settings, the menu bar,
-  the local API and `install-transcription-model`) compiles the `.mlpackage` once
+- Preparation (`Transcriber::prepare_selection`, used by Settings, the menu bar
+  and `install-transcription-model`) compiles the `.mlpackage` once
   into `<bundle>/Phonon-2.mlmodelc` (a stable path inside Hex's models
   directory, deleted with the model), loads every encoder function once and
   prewarms, then releases that session. The first load of each function on a
   Mac compiles it for the Neural Engine; doing it here keeps that out of the
   first dictation of each length.
+- The local API's prepare route loads only the service's warm session, so on
+  a Mac that has never prepared Phonon, the first transcription of each length
+  compiles that function. Loading a second, eager session there as well put two
+  multi-gigabyte Core ML loads back to back and failed once on the 7 GB runner.
 - The warm dictation session uses the package's lazy default: its 15 s
   function is resident and the others load on first use, reusing the
   system's compiled programs. This keeps resident memory lower (see below).

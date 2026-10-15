@@ -1299,14 +1299,6 @@ fn stream_model_prepare(
             bail!("model preparation canceled");
         }
         crate::transcription_models::ModelPreparationStage::Loading.store(&stage);
-        if matches!(
-            model.runtime,
-            crate::transcription_models::ModelRuntime::PhononCoreMl(_)
-        ) {
-            // Compile every Phonon encoder function once before the warm,
-            // lazily loading service session takes over.
-            crate::transcription::Transcriber::prepare_selection(&selection)?;
-        }
         transcription
             .prepare(selection)
             .map_err(|error| eyre!("model preparation failed: {error:?}"))
