@@ -78,5 +78,9 @@ result=$(curl --fail --silent --show-error \
   -H "Content-Type: audio/wav" \
   --data-binary "@$audio" \
   "http://127.0.0.1:$port/transcriptions?model=$model&language=en")
-printf '%s\n' "$result" | jq -e '.transcript | length > 0' >/dev/null
 printf '%s\n' "$result" | jq .
+if ! printf '%s\n' "$result" | jq -e '.transcript | length > 0' >/dev/null; then
+  echo "Transcription returned no text. Service log:" >&2
+  tail -n 40 "$support/logs/process.log" >&2 2>/dev/null || true
+  exit 1
+fi

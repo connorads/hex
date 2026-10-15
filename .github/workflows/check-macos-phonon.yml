@@ -85,6 +85,14 @@ jobs:
           target/release/voice-control install-transcription-model phonon_2_coreml_en \
             | tee "$RESULTS/install-cached.json"
           du -sh "$HEX_PHONON_BUNDLE" "$HEX_PHONON_BUNDLE/Phonon-2.mlmodelc" | tee -a "$RESULTS/install-cached.json"
+      - name: Local API smoke test (prepare over HTTP, then transcribe) with Phonon
+        if: always()
+        run: |
+          # Three fresh service processes: preparation and transcription must be repeatable.
+          for attempt in 1 2 3; do
+            HEX_SMOKE_MODEL=phonon_2_coreml_en HEX_SMOKE_BINARY=target/release/voice-control \
+              scripts/smoke-transcription-api.sh | tee -a "$RESULTS/local-api-phonon.json"
+          done
       - name: Real Core ML inference tests
         run: |
           set -o pipefail
@@ -99,14 +107,6 @@ jobs:
           target/release/voice-control benchmark-transcription "$HEX_PHONON_FIXTURES/manifest.json" \
             --backend selection --model-id phonon_2_coreml_en --warmups 1 --runs 5 \
             | tee "$RESULTS/benchmark-phonon.ndjson"
-      - name: Local API smoke test (prepare over HTTP, then transcribe) with Phonon
-        if: always()
-        run: |
-          # Three fresh service processes: preparation and transcription must be repeatable.
-          for attempt in 1 2 3; do
-            HEX_SMOKE_MODEL=phonon_2_coreml_en HEX_SMOKE_BINARY=target/release/voice-control \
-              scripts/smoke-transcription-api.sh | tee -a "$RESULTS/local-api-phonon.json"
-          done
       - name: Capture the English model picker with Phonon listed
         if: always()
         continue-on-error: true
