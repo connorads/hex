@@ -10,6 +10,8 @@ mono PCM16 WAV with macOS `afconvert`, and writes:
   OUT/<id>.wav              the clips
   OUT/long-60s.wav, long-120s.wav   whole clips joined by 300 ms pauses
   OUT/manifest.json         a `benchmark-transcription` corpus of all of them
+  OUT/protocol/*.wav        `say` speech with voice-delimited control phrases
+                            (synthetic: checks control handling, not accuracy)
 
 Nothing here is committed; run it into a scratch directory.
 """
@@ -39,6 +41,12 @@ JFK_TEXT = (
     "And so my fellow Americans, ask not what your country can do for you, "
     "ask what you can do for your country."
 )
+PROTOCOL = {
+    "period-stop": "Say, I don't understand this. Say stop.",
+    "question-stop": "Say, is this working? Say stop.",
+    "exclamation-send": "Say, ship it! Say send.",
+    "comma-stop": "Say, meet me at five, say stop.",
+}
 RATE = 16_000
 GAP = b"\x00\x00" * (RATE * 300 // 1000)
 
@@ -101,6 +109,16 @@ def main() -> None:
         write(output / f"long-{seconds}s.wav", audio)
         corpus.append({"id": f"long-{seconds}s", "audio": f"long-{seconds}s.wav", "expected": " ".join(words)})
     (output / "manifest.json").write_text(json.dumps({"clips": corpus}, indent=1))
+    protocol = output / "protocol"
+    protocol.mkdir(exist_ok=True)
+    for name, prompt in PROTOCOL.items():
+        aiff = protocol / f"{name}.aiff"
+        subprocess.run(["say", "-v", "Samantha", "-r", "165", "-o", str(aiff), prompt], check=True)
+        subprocess.run(
+            ["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(aiff), str(protocol / f"{name}.wav")],
+            check=True,
+        )
+        aiff.unlink()
     print(f"wrote {len(corpus)} fixtures to {output}")
 
 

@@ -603,6 +603,48 @@ mod native {
         assert_eq!(phonon.transcribe(&samples).unwrap().text, expected);
     }
 
+    /// Voice-delimited dictation on `say` speech: the control phrase is cut
+    /// at its word timing, retranscribed without it, and stripped. Synthetic
+    /// speech checks control handling, not recognition accuracy.
+    #[test]
+    #[ignore = "requires Apple silicon, HEX_PHONON_BUNDLE and HEX_PHONON_FIXTURES"]
+    fn voice_delimited_dictation_drops_control_phrases() {
+        let protocol = DictationProtocol::try_new(
+            vec!["say".into()],
+            vec!["say paste".into(), "say stop".into()],
+            vec!["say send".into()],
+            vec!["say cancel".into(), "never mind".into()],
+        )
+        .unwrap();
+        let mut phonon = load();
+        for (name, expected) in [
+            ("period-stop", "I don't understand this."),
+            ("question-stop", "Is this working?"),
+            ("exclamation-send", "Ship it!"),
+            ("comma-stop", "Meet me at five."),
+        ] {
+            let samples = read_wav(&fixtures().join(format!("protocol/{name}.wav")));
+            let full = phonon.transcribe(&samples).unwrap();
+            let clipped = phonon.transcribe_voice(&samples, &protocol).unwrap();
+            let prepared = protocol.strip(&clipped);
+            println!(
+                "{}",
+                serde_json::json!({"clip": name, "full": full.text, "clipped": clipped,
+                    "prepared": prepared, "expected": expected})
+            );
+            assert!(
+                protocol.control_suffix(&full.text).is_some(),
+                "{name}: no control phrase heard in {:?}",
+                full.text
+            );
+            assert_eq!(wer(expected, &prepared), 0.0, "{name}: {prepared:?}");
+            assert!(
+                protocol.control_suffix(&prepared).is_none(),
+                "{name}: {prepared:?}"
+            );
+        }
+    }
+
     /// Lazy versus eager encoder functions: resident memory and the first
     /// call that needs each bucket. Lazy runs first because freed memory is
     /// not always returned to the system.
